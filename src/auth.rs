@@ -35,6 +35,9 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
     let client = HttpClient::new();
     let response = client.get(&url).send().await?;
 
+    // Use final URL after redirects for resolving relative links
+    let final_url = response.url().to_string();
+
     let mut micropub_endpoint = None;
     let mut authorization_endpoint = None;
     let mut token_endpoint = None;
@@ -58,7 +61,7 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
                     if let Some(rel_value) = param.trim().strip_prefix("rel=") {
                         let rel = rel_value.trim_matches('"').trim_matches('\'');
 
-                        let resolved = resolve_url(&url, endpoint_url)?;
+                        let resolved = resolve_url(&final_url, endpoint_url)?;
                         match rel {
                             "micropub" => micropub_endpoint = Some(resolved),
                             "authorization_endpoint" => authorization_endpoint = Some(resolved),
@@ -83,13 +86,13 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
 
         match (rel, href) {
             (Some("micropub"), Some(href)) if micropub_endpoint.is_none() => {
-                micropub_endpoint = Some(resolve_url(&url, href)?);
+                micropub_endpoint = Some(resolve_url(&final_url, href)?);
             }
             (Some("authorization_endpoint"), Some(href)) if authorization_endpoint.is_none() => {
-                authorization_endpoint = Some(resolve_url(&url, href)?);
+                authorization_endpoint = Some(resolve_url(&final_url, href)?);
             }
             (Some("token_endpoint"), Some(href)) if token_endpoint.is_none() => {
-                token_endpoint = Some(resolve_url(&url, href)?);
+                token_endpoint = Some(resolve_url(&final_url, href)?);
             }
             _ => {}
         }
