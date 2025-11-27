@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde_json::Map;
 
 use crate::client::{MicropubClient, MicropubRequest, MicropubAction};
-use crate::config::Config;
+use crate::config::{Config, load_token};
 
 pub async fn cmd_update(url: &str) -> Result<()> {
     println!("Update operation not yet implemented for: {}", url);
@@ -24,12 +24,7 @@ pub async fn cmd_delete(post_url: &str) -> Result<()> {
     let profile = config.get_profile(profile_name)
         .context("Profile not found")?;
 
-    let token_path = crate::config::get_tokens_dir()?
-        .join(format!("{}.token", profile_name));
-    let token = std::fs::read_to_string(&token_path)
-        .context("Token not found")?
-        .trim()
-        .to_string();
+    let token = load_token(profile_name)?;
 
     let micropub_endpoint = profile.micropub_endpoint.as_ref()
         .context("No micropub endpoint configured")?;
@@ -61,12 +56,7 @@ pub async fn cmd_undelete(post_url: &str) -> Result<()> {
     let profile = config.get_profile(profile_name)
         .context("Profile not found")?;
 
-    let token_path = crate::config::get_tokens_dir()?
-        .join(format!("{}.token", profile_name));
-    let token = std::fs::read_to_string(&token_path)
-        .context("Token not found")?
-        .trim()
-        .to_string();
+    let token = load_token(profile_name)?;
 
     let micropub_endpoint = profile.micropub_endpoint.as_ref()
         .context("No micropub endpoint configured")?;

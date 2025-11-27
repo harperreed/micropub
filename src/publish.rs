@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
 use crate::client::{MicropubClient, MicropubRequest, MicropubAction};
-use crate::config::Config;
+use crate::config::{Config, load_token};
 use crate::draft::Draft;
 use crate::media::{find_media_references, resolve_path, upload_file, replace_paths};
 
@@ -32,12 +32,7 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
         .context(format!("Profile not found: {}", profile_name))?;
 
     // Load token
-    let token_path = crate::config::get_tokens_dir()?
-        .join(format!("{}.token", profile_name));
-    let token = std::fs::read_to_string(&token_path)
-        .context("Token not found. Run 'micropub auth' first")?
-        .trim()
-        .to_string();
+    let token = load_token(profile_name)?;
 
     // Find and upload media
     let media_refs = find_media_references(&draft.content);
@@ -45,7 +40,10 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
 
     if !media_refs.is_empty() {
         let media_endpoint = profile.media_endpoint.as_ref()
-            .context("No media endpoint configured for this profile")?;
+            .context(format!(
+                "No media endpoint found for profile '{}'. Re-authenticate to discover media endpoint:\n  micropub auth {}",
+                profile_name, profile.domain
+            ))?;
 
         println!("Uploading {} media file(s)...", media_refs.len());
 

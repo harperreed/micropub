@@ -110,6 +110,21 @@ impl Config {
     }
 }
 
+/// Load authentication token for a profile
+pub fn load_token(profile_name: &str) -> Result<String> {
+    let token_path = get_tokens_dir()?.join(format!("{}.token", profile_name));
+    let token = fs::read_to_string(&token_path)
+        .context("Token not found. Run 'micropub auth <domain>' to authenticate")?
+        .trim()
+        .to_string();
+
+    if token.is_empty() {
+        anyhow::bail!("Token file is empty. Re-authenticate with: micropub auth <domain>");
+    }
+
+    Ok(token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -47,6 +47,11 @@ fn is_local_path(path: &str) -> bool {
 
 /// Resolve a path (expand ~, handle relative paths)
 pub fn resolve_path(path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
+    // Validate input doesn't contain path traversal attempts
+    if path.contains("..") {
+        anyhow::bail!("Path traversal not allowed in file paths: {}", path);
+    }
+
     let expanded = if let Some(stripped) = path.strip_prefix("~/") {
         let home = dirs::home_dir()
             .context("Could not determine home directory")?;
@@ -58,6 +63,11 @@ pub fn resolve_path(path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
     } else {
         PathBuf::from(path)
     };
+
+    // Verify file exists and is accessible
+    if !expanded.exists() {
+        anyhow::bail!("File not found or inaccessible: {}", expanded.display());
+    }
 
     Ok(expanded)
 }

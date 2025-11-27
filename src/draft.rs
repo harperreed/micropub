@@ -88,6 +88,11 @@ impl Draft {
 
     /// Load a draft from file
     pub fn load(id: &str) -> Result<Self> {
+        // Validate draft ID to prevent path traversal
+        if id.contains('/') || id.contains('\\') || id.contains("..") {
+            anyhow::bail!("Invalid draft ID: {}", id);
+        }
+
         let path = get_drafts_dir()?.join(format!("{}.md", id));
         let contents = fs::read_to_string(&path)
             .context("Failed to read draft file")?;
@@ -179,6 +184,11 @@ pub fn cmd_new() -> Result<()> {
 
 /// Edit an existing draft
 pub fn cmd_edit(draft_id: &str) -> Result<()> {
+    // Validate draft ID to prevent path traversal
+    if draft_id.contains('/') || draft_id.contains('\\') || draft_id.contains("..") {
+        anyhow::bail!("Invalid draft ID: {}", draft_id);
+    }
+
     let path = get_drafts_dir()?.join(format!("{}.md", draft_id));
 
     if !path.exists() {
@@ -227,6 +237,11 @@ pub fn cmd_list() -> Result<()> {
 
 /// Show a draft's content
 pub fn cmd_show(draft_id: &str) -> Result<()> {
+    // Validate draft ID to prevent path traversal
+    if draft_id.contains('/') || draft_id.contains('\\') || draft_id.contains("..") {
+        anyhow::bail!("Invalid draft ID: {}", draft_id);
+    }
+
     let draft = Draft::load(draft_id)?;
     println!("{}", draft.to_string()?);
     Ok(())

@@ -37,7 +37,9 @@ impl MicropubRequest {
             }
             MicropubAction::Update { replace, add, delete } => {
                 obj.insert("action".to_string(), Value::String("update".to_string()));
-                obj.insert("url".to_string(), Value::String(self.url.clone().unwrap_or_default()));
+                let url = self.url.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("URL required for update action"))?;
+                obj.insert("url".to_string(), Value::String(url.clone()));
 
                 if !replace.is_empty() {
                     obj.insert("replace".to_string(), Value::Object(replace.clone()));
@@ -53,11 +55,15 @@ impl MicropubRequest {
             }
             MicropubAction::Delete => {
                 obj.insert("action".to_string(), Value::String("delete".to_string()));
-                obj.insert("url".to_string(), Value::String(self.url.clone().unwrap_or_default()));
+                let url = self.url.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("URL required for delete action"))?;
+                obj.insert("url".to_string(), Value::String(url.clone()));
             }
             MicropubAction::Undelete => {
                 obj.insert("action".to_string(), Value::String("undelete".to_string()));
-                obj.insert("url".to_string(), Value::String(self.url.clone().unwrap_or_default()));
+                let url = self.url.as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("URL required for undelete action"))?;
+                obj.insert("url".to_string(), Value::String(url.clone()));
             }
         }
 

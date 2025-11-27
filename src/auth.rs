@@ -20,35 +20,75 @@ use oauth2::basic::BasicClient;
 
 /// Discover endpoints from a domain
 async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
-    let url = if domain.starts_with("http") {
+    // Enforce HTTPS for security
+    let url = if domain.starts_with("https://") {
         domain.to_string()
+    } else if domain.starts_with("http://") {
+        anyhow::bail!(
+            "Insecure HTTP not allowed. Please use HTTPS: {}",
+            domain.replace("http://", "https://")
+        );
     } else {
         format!("https://{}", domain)
     };
 
     let client = HttpClient::new();
     let response = client.get(&url).send().await?;
-    let html = response.text().await?;
-
-    let document = Html::parse_document(&html);
-    let link_selector = Selector::parse("link[rel]").unwrap();
 
     let mut micropub_endpoint = None;
     let mut authorization_endpoint = None;
     let mut token_endpoint = None;
+
+    // First, check HTTP Link headers (preferred by spec)
+    for link_header in response.headers().get_all("link") {
+        if let Ok(link_str) = link_header.to_str() {
+            // Parse Link header format: <url>; rel="relation"
+            for link in link_str.split(',') {
+                let parts: Vec<&str> = link.split(';').collect();
+                if parts.len() < 2 {
+                    continue;
+                }
+
+                // Extract URL (remove < and >)
+                let url_part = parts[0].trim();
+                let endpoint_url = url_part.trim_start_matches('<').trim_end_matches('>');
+
+                // Extract rel value
+                for param in &parts[1..] {
+                    if let Some(rel_value) = param.trim().strip_prefix("rel=") {
+                        let rel = rel_value.trim_matches('"').trim_matches('\'');
+
+                        let resolved = resolve_url(&url, endpoint_url)?;
+                        match rel {
+                            "micropub" => micropub_endpoint = Some(resolved),
+                            "authorization_endpoint" => authorization_endpoint = Some(resolved),
+                            "token_endpoint" => token_endpoint = Some(resolved),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let html = response.text().await?;
+
+    // Then check HTML <link> tags (fallback)
+    let document = Html::parse_document(&html);
+    let link_selector = Selector::parse("link[rel]").unwrap();
 
     for element in document.select(&link_selector) {
         let rel = element.value().attr("rel");
         let href = element.value().attr("href");
 
         match (rel, href) {
-            (Some("micropub"), Some(href)) => {
+            (Some("micropub"), Some(href)) if micropub_endpoint.is_none() => {
                 micropub_endpoint = Some(resolve_url(&url, href)?);
             }
-            (Some("authorization_endpoint"), Some(href)) => {
+            (Some("authorization_endpoint"), Some(href)) if authorization_endpoint.is_none() => {
                 authorization_endpoint = Some(resolve_url(&url, href)?);
             }
-            (Some("token_endpoint"), Some(href)) => {
+            (Some("token_endpoint"), Some(href)) if token_endpoint.is_none() => {
                 token_endpoint = Some(resolve_url(&url, href)?);
             }
             _ => {}
@@ -56,11 +96,11 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
     }
 
     let micropub = micropub_endpoint
-        .context("Could not find micropub endpoint")?;
+        .context("Could not find micropub endpoint in Link headers or HTML")?;
     let auth = authorization_endpoint
-        .context("Could not find authorization_endpoint")?;
+        .context("Could not find authorization_endpoint in Link headers or HTML")?;
     let token = token_endpoint
-        .context("Could not find token_endpoint")?;
+        .context("Could not find token_endpoint in Link headers or HTML")?;
 
     Ok((micropub, auth, token))
 }
