@@ -119,6 +119,9 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     let mut token = String::new();
     io::stdin().read_line(&mut token)?;
     let token = token.trim().to_string();
+    if token.is_empty() {
+        anyhow::bail!("Token cannot be empty");
+    }
 
     // Discover media endpoint
     println!("\nDiscovering media endpoint...");
