@@ -83,6 +83,8 @@ micropub draft show <draft-id>
 micropub publish <draft-id>
 ```
 
+The `<draft-id>` is the identifier shown in `draft list`, not a full file path.
+
 This will:
 1. Parse the draft
 2. Upload any media files
@@ -122,11 +124,7 @@ micropub update <post-url>
 
 ### Use a specific profile
 
-Add `profile: mysite` to draft frontmatter, or use `--profile` flag:
-
-```bash
-micropub publish <draft-id> --profile mysite
-```
+Add `profile: mysite` to draft frontmatter to override the default profile.
 
 ## Troubleshooting
 
@@ -135,6 +133,8 @@ micropub publish <draft-id> --profile mysite
 ```bash
 micropub debug <profile-name>
 ```
+
+**Note:** The debug command is not yet fully implemented.
 
 ### Check configuration
 
