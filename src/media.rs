@@ -2,18 +2,23 @@
 // ABOUTME: Detects local file references, uploads to media endpoint, replaces URLs
 
 use anyhow::{Context, Result};
+use lazy_static::lazy_static;
 use regex::Regex;
 use reqwest::{Client as HttpClient, header, multipart};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+lazy_static! {
+    static ref MD_IMG_RE: Regex = Regex::new(r"!\[.*?\]\((.*?)\)").unwrap();
+    static ref HTML_IMG_RE: Regex = Regex::new(r#"<img[^>]+src=["']([^"']+)["']"#).unwrap();
+}
 
 /// Find all media file references in content
 pub fn find_media_references(content: &str) -> Vec<String> {
     let mut refs = Vec::new();
 
     // Markdown images: ![alt](path)
-    let md_img_re = Regex::new(r"!\[.*?\]\((.*?)\)").unwrap();
-    for cap in md_img_re.captures_iter(content) {
+    for cap in MD_IMG_RE.captures_iter(content) {
         if let Some(path) = cap.get(1) {
             let path_str = path.as_str();
             if is_local_path(path_str) {
@@ -23,8 +28,7 @@ pub fn find_media_references(content: &str) -> Vec<String> {
     }
 
     // HTML img tags: <img src="path">
-    let html_img_re = Regex::new(r#"<img[^>]+src=["']([^"']+)["']"#).unwrap();
-    for cap in html_img_re.captures_iter(content) {
+    for cap in HTML_IMG_RE.captures_iter(content) {
         if let Some(path) = cap.get(1) {
             let path_str = path.as_str();
             if is_local_path(path_str) {
@@ -43,10 +47,10 @@ fn is_local_path(path: &str) -> bool {
 
 /// Resolve a path (expand ~, handle relative paths)
 pub fn resolve_path(path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
-    let expanded = if path.starts_with("~/") {
+    let expanded = if let Some(stripped) = path.strip_prefix("~/") {
         let home = dirs::home_dir()
             .context("Could not determine home directory")?;
-        home.join(&path[2..])
+        home.join(stripped)
     } else if path.starts_with('/') {
         PathBuf::from(path)
     } else if let Some(base) = base_dir {
@@ -96,7 +100,9 @@ pub async fn upload_file(
         .context("Failed to upload file")?;
 
     if !response.status().is_success() {
-        anyhow::bail!("Upload failed: {}", response.status());
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| String::from("<unable to read response body>"));
+        anyhow::bail!("Upload failed with status {}: {}", status, body);
     }
 
     // Get URL from Location header
