@@ -7,5 +7,6 @@ pub mod draft;
 pub mod client;
 pub mod media;
 pub mod publish;
+pub mod operations;
 
 pub use anyhow::{Result, Error};

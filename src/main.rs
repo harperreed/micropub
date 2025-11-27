@@ -116,15 +116,15 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Commands::Update { url } => {
-            println!("Update command: {}", url);
+            micropub::operations::cmd_update(&url).await?;
             Ok(())
         }
         Commands::Delete { url } => {
-            println!("Delete command: {}", url);
+            micropub::operations::cmd_delete(&url).await?;
             Ok(())
         }
         Commands::Undelete { url } => {
-            println!("Undelete command: {}", url);
+            micropub::operations::cmd_undelete(&url).await?;
             Ok(())
         }
         Commands::Debug { profile } => {
