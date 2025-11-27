@@ -86,19 +86,19 @@ async fn main() -> Result<()> {
         }
         Commands::Draft(cmd) => match cmd {
             DraftCommands::New => {
-                micropub::draft::cmd_new().await?;
+                micropub::draft::cmd_new()?;
                 Ok(())
             }
             DraftCommands::Edit { draft_id } => {
-                micropub::draft::cmd_edit(&draft_id).await?;
+                micropub::draft::cmd_edit(&draft_id)?;
                 Ok(())
             }
             DraftCommands::List => {
-                micropub::draft::cmd_list().await?;
+                micropub::draft::cmd_list()?;
                 Ok(())
             }
             DraftCommands::Show { draft_id } => {
-                micropub::draft::cmd_show(&draft_id).await?;
+                micropub::draft::cmd_show(&draft_id)?;
                 Ok(())
             }
         }

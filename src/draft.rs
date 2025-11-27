@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use uuid::Uuid;
 
 use crate::config::{get_drafts_dir, get_archive_dir, Config};
@@ -151,10 +152,8 @@ pub fn generate_draft_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-use std::process::Command;
-
 /// Create a new draft and open in editor
-pub async fn cmd_new() -> Result<()> {
+pub fn cmd_new() -> Result<()> {
     let id = generate_draft_id();
     let draft = Draft::new(id.clone());
 
@@ -179,7 +178,7 @@ pub async fn cmd_new() -> Result<()> {
 }
 
 /// Edit an existing draft
-pub async fn cmd_edit(draft_id: &str) -> Result<()> {
+pub fn cmd_edit(draft_id: &str) -> Result<()> {
     let path = get_drafts_dir()?.join(format!("{}.md", draft_id));
 
     if !path.exists() {
@@ -200,7 +199,7 @@ pub async fn cmd_edit(draft_id: &str) -> Result<()> {
 }
 
 /// List all drafts
-pub async fn cmd_list() -> Result<()> {
+pub fn cmd_list() -> Result<()> {
     let draft_ids = Draft::list_all()?;
 
     if draft_ids.is_empty() {
@@ -227,7 +226,7 @@ pub async fn cmd_list() -> Result<()> {
 }
 
 /// Show a draft's content
-pub async fn cmd_show(draft_id: &str) -> Result<()> {
+pub fn cmd_show(draft_id: &str) -> Result<()> {
     let draft = Draft::load(draft_id)?;
     println!("{}", draft.to_string()?);
     Ok(())

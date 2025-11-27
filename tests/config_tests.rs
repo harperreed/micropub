@@ -1,5 +1,4 @@
 use micropub::config::{get_config_dir, get_data_dir};
-use std::path::PathBuf;
 
 #[test]
 fn test_config_dir_exists() {
