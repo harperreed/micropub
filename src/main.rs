@@ -84,9 +84,23 @@ async fn main() -> Result<()> {
             println!("Auth command: {}", domain);
             Ok(())
         }
-        Commands::Draft(_cmd) => {
-            println!("Draft command");
-            Ok(())
+        Commands::Draft(cmd) => match cmd {
+            DraftCommands::New => {
+                micropub::draft::cmd_new().await?;
+                Ok(())
+            }
+            DraftCommands::Edit { draft_id } => {
+                micropub::draft::cmd_edit(&draft_id).await?;
+                Ok(())
+            }
+            DraftCommands::List => {
+                micropub::draft::cmd_list().await?;
+                Ok(())
+            }
+            DraftCommands::Show { draft_id } => {
+                micropub::draft::cmd_show(&draft_id).await?;
+                Ok(())
+            }
         }
         Commands::Publish { draft } => {
             println!("Publish command: {}", draft);

@@ -8,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::config::{get_drafts_dir, get_archive_dir};
+use crate::config::{get_drafts_dir, get_archive_dir, Config};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -149,6 +149,88 @@ impl Draft {
 /// Generate a new draft ID
 pub fn generate_draft_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+use std::process::Command;
+
+/// Create a new draft and open in editor
+pub async fn cmd_new() -> Result<()> {
+    let id = generate_draft_id();
+    let draft = Draft::new(id.clone());
+
+    // Save initial draft
+    let path = draft.save()?;
+
+    // Open in editor
+    let config = Config::load()?;
+    let editor = config.editor
+        .or_else(|| std::env::var("EDITOR").ok())
+        .unwrap_or_else(|| "vim".to_string());
+
+    Command::new(&editor)
+        .arg(&path)
+        .status()
+        .context("Failed to open editor")?;
+
+    println!("Draft created: {}", id);
+    println!("Path: {}", path.display());
+
+    Ok(())
+}
+
+/// Edit an existing draft
+pub async fn cmd_edit(draft_id: &str) -> Result<()> {
+    let path = get_drafts_dir()?.join(format!("{}.md", draft_id));
+
+    if !path.exists() {
+        anyhow::bail!("Draft not found: {}", draft_id);
+    }
+
+    let config = Config::load()?;
+    let editor = config.editor
+        .or_else(|| std::env::var("EDITOR").ok())
+        .unwrap_or_else(|| "vim".to_string());
+
+    Command::new(&editor)
+        .arg(&path)
+        .status()
+        .context("Failed to open editor")?;
+
+    Ok(())
+}
+
+/// List all drafts
+pub async fn cmd_list() -> Result<()> {
+    let draft_ids = Draft::list_all()?;
+
+    if draft_ids.is_empty() {
+        println!("No drafts found.");
+        return Ok(());
+    }
+
+    println!("Drafts:");
+    for id in draft_ids {
+        match Draft::load(&id) {
+            Ok(draft) => {
+                let title = draft.metadata.name
+                    .unwrap_or_else(|| "[untitled]".to_string());
+                let post_type = &draft.metadata.post_type;
+                println!("  {} - {} ({})", id, title, post_type);
+            }
+            Err(_) => {
+                println!("  {} - [error loading]", id);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Show a draft's content
+pub async fn cmd_show(draft_id: &str) -> Result<()> {
+    let draft = Draft::load(draft_id)?;
+    println!("{}", draft.to_string()?);
+    Ok(())
 }
 
 #[cfg(test)]
