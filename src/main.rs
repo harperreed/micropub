@@ -9,6 +9,10 @@ use micropub::Result;
 #[command(name = "micropub")]
 #[command(about = "Ultra-compliant Micropub CLI", long_about = None)]
 struct Cli {
+    /// Enable verbose output
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }

@@ -98,7 +98,7 @@ impl MicropubClient {
             .body(json)
             .send()
             .await
-            .context("Failed to send request")?;
+            .context("Failed to send request to micropub endpoint")?;
 
         let status = response.status();
 
@@ -118,18 +118,41 @@ impl MicropubClient {
             })
         } else {
             // Try to parse error response
-            let error_response: MicropubResponse = serde_json::from_str(&body)
-                .unwrap_or(MicropubResponse {
-                    url: None,
-                    error: Some("unknown_error".to_string()),
-                    error_description: Some(body),
-                });
+            let error_response: Result<MicropubResponse, _> = serde_json::from_str(&body);
 
-            anyhow::bail!(
-                "Micropub error: {} - {}",
-                error_response.error.unwrap_or_default(),
-                error_response.error_description.unwrap_or_default()
-            );
+            let error_msg = if let Ok(err) = error_response {
+                format_error_message(&err.error, &err.error_description)
+            } else {
+                format!("HTTP {}: {}", status, body)
+            };
+
+            anyhow::bail!(error_msg);
+        }
+    }
+}
+
+fn format_error_message(error: &Option<String>, description: &Option<String>) -> String {
+    let error_code = error.as_deref().unwrap_or("unknown_error");
+    let desc = description.as_deref().unwrap_or("No description provided");
+
+    match error_code {
+        "insufficient_scope" => {
+            format!(
+                "Insufficient permissions: {}\n\nRe-authenticate with: micropub auth <domain>",
+                desc
+            )
+        }
+        "invalid_request" => {
+            format!("Invalid request: {}\n\nCheck your draft format and try again", desc)
+        }
+        "unauthorized" => {
+            format!(
+                "Unauthorized: {}\n\nYour token may be expired. Re-authenticate with: micropub auth <domain>",
+                desc
+            )
+        }
+        _ => {
+            format!("Micropub error ({}): {}", error_code, desc)
         }
     }
 }
