@@ -101,12 +101,18 @@ impl MicropubClient {
             .context("Failed to send request")?;
 
         let status = response.status();
+
+        // Get Location header for successful creates
+        let location = response.headers()
+            .get(header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let body = response.text().await?;
 
         if status.is_success() {
-            // Try to parse location header or response body
             Ok(MicropubResponse {
-                url: None, // TODO: parse from Location header
+                url: location,
                 error: None,
                 error_description: None,
             })
