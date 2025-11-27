@@ -77,6 +77,12 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
         ));
     }
 
+    if !draft.metadata.photo.is_empty() {
+        properties.insert("photo".to_string(), Value::Array(
+            draft.metadata.photo.iter().map(|p| Value::String(p.clone())).collect()
+        ));
+    }
+
     if !draft.metadata.syndicate_to.is_empty() {
         properties.insert("mp-syndicate-to".to_string(), Value::Array(
             draft.metadata.syndicate_to.iter().map(|s| Value::String(s.clone())).collect()
