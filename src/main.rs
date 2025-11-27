@@ -1,6 +1,7 @@
 // ABOUTME: Main entry point for micropub CLI
 // ABOUTME: Parses commands and dispatches to appropriate handlers
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 use micropub::Result;
 
@@ -103,11 +104,15 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Publish { draft } => {
-            println!("Publish command: {}", draft);
+            micropub::publish::cmd_publish(&draft, None).await?;
             Ok(())
         }
         Commands::Backdate { draft, date } => {
-            println!("Backdate command: {} at {}", draft, date);
+            use chrono::DateTime;
+            let parsed_date = DateTime::parse_from_rfc3339(&date)
+                .context("Invalid date format. Use ISO 8601 (e.g., 2024-01-15T10:30:00Z)")?
+                .with_timezone(&chrono::Utc);
+            micropub::publish::cmd_publish(&draft, Some(parsed_date)).await?;
             Ok(())
         }
         Commands::Update { url } => {

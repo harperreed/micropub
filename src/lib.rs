@@ -6,5 +6,6 @@ pub mod auth;
 pub mod draft;
 pub mod client;
 pub mod media;
+pub mod publish;
 
 pub use anyhow::{Result, Error};
