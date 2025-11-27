@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Auth { domain } => {
-            println!("Auth command: {}", domain);
+            micropub::auth::cmd_auth(&domain).await?;
             Ok(())
         }
         Commands::Draft(cmd) => match cmd {
