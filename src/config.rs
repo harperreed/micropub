@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use url::Url;
 
 /// Get the XDG config directory for micropub
 pub fn get_config_dir() -> Result<PathBuf> {
@@ -68,6 +69,16 @@ pub struct Profile {
 }
 
 impl Config {
+    /// Validate configuration values
+    pub fn validate(&self) -> Result<()> {
+        // Validate client_id is a valid URL if provided
+        if let Some(ref client_id) = self.client_id {
+            Url::parse(client_id)
+                .context("client_id must be a valid URL (e.g., 'https://github.com/user/repo')")?;
+        }
+        Ok(())
+    }
+
     /// Load config from file, or create default if not exists
     pub fn load() -> Result<Self> {
         let config_path = get_config_dir()?.join("config.toml");
@@ -77,6 +88,7 @@ impl Config {
                 fs::read_to_string(&config_path).context("Failed to read config file")?;
             let config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
+            config.validate()?;
             Ok(config)
         } else {
             // Return default config
@@ -151,5 +163,46 @@ mod tests {
 
         let toml = toml::to_string(&config).unwrap();
         assert!(toml.contains("example.com"));
+    }
+
+    #[test]
+    fn test_validate_valid_client_id() {
+        let config = Config {
+            default_profile: "test".to_string(),
+            editor: None,
+            client_id: Some("https://github.com/user/repo".to_string()),
+            profiles: HashMap::new(),
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_invalid_client_id() {
+        let config = Config {
+            default_profile: "test".to_string(),
+            editor: None,
+            client_id: Some("not-a-url".to_string()),
+            profiles: HashMap::new(),
+        };
+
+        let result = config.validate();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("client_id must be a valid URL"));
+    }
+
+    #[test]
+    fn test_validate_no_client_id() {
+        let config = Config {
+            default_profile: "test".to_string(),
+            editor: None,
+            client_id: None,
+            profiles: HashMap::new(),
+        };
+
+        assert!(config.validate().is_ok());
     }
 }

@@ -20,16 +20,39 @@ use crate::config::{get_tokens_dir, Config, Profile};
 
 /// Discover endpoints from a domain
 async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
-    // Enforce HTTPS for security
+    // Check if this is a localhost/development domain
+    let is_localhost = domain.starts_with("localhost")
+        || domain.starts_with("127.0.0.1")
+        || domain.starts_with("::1")
+        || domain.starts_with("[::1]")
+        || domain.starts_with("http://localhost")
+        || domain.starts_with("http://127.0.0.1")
+        || domain.starts_with("http://::1")
+        || domain.starts_with("http://[::1]")
+        || domain.starts_with("https://localhost")
+        || domain.starts_with("https://127.0.0.1")
+        || domain.starts_with("https://::1")
+        || domain.starts_with("https://[::1]");
+
+    // Enforce HTTPS for security (except localhost for development)
     let url = if domain.starts_with("https://") {
         domain.to_string()
     } else if domain.starts_with("http://") {
-        anyhow::bail!(
-            "Insecure HTTP not allowed. Please use HTTPS: {}",
-            domain.replace("http://", "https://")
-        );
+        if is_localhost {
+            domain.to_string() // Allow HTTP for localhost
+        } else {
+            anyhow::bail!(
+                "Insecure HTTP not allowed. Please use HTTPS: {}",
+                domain.replace("http://", "https://")
+            );
+        }
     } else {
-        format!("https://{}", domain)
+        // No scheme provided
+        if is_localhost {
+            format!("http://{}", domain) // Default to HTTP for localhost
+        } else {
+            format!("https://{}", domain) // Default to HTTPS for remote
+        }
     };
 
     let client = HttpClient::new();
@@ -38,9 +61,9 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
     // Use final URL after redirects for resolving relative links
     let final_url = response.url().to_string();
 
-    // Validate that redirects didn't downgrade us from HTTPS to HTTP
+    // Validate that redirects didn't downgrade us from HTTPS to HTTP (except localhost)
     let final_url_parsed = Url::parse(&final_url)?;
-    if final_url_parsed.scheme() != "https" {
+    if final_url_parsed.scheme() != "https" && !is_localhost {
         anyhow::bail!(
             "Security error: Server redirected to insecure HTTP ({}). This is not allowed.",
             final_url
@@ -239,27 +262,28 @@ async fn handle_callback(
         .unwrap())
 }
 
-/// Find an available port from a list of candidates
-fn find_available_port() -> Result<u16> {
+/// Find and bind to an available port from candidates
+fn find_and_bind_port() -> Result<std::net::TcpListener> {
     let candidate_ports = [8089, 8090, 8091, 8092, 8093];
 
     for port in candidate_ports {
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        if std::net::TcpListener::bind(addr).is_ok() {
-            return Ok(port);
+        if let Ok(listener) = std::net::TcpListener::bind(addr) {
+            return Ok(listener);
         }
     }
 
-    anyhow::bail!(
-        "Could not find an available port for OAuth callback. Tried ports: {:?}",
-        candidate_ports
-    )
+    // Fallback: let OS choose a random available port
+    println!("⚠ All preferred ports (8089-8093) occupied, using OS-assigned random port...");
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .context("Failed to bind to any port, including OS-assigned random port")
 }
 
 /// Start local server to receive OAuth callback
-async fn start_callback_server(callback_data: Arc<OAuthCallback>, port: u16) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-
+async fn start_callback_server(
+    callback_data: Arc<OAuthCallback>,
+    listener: std::net::TcpListener,
+) -> Result<()> {
     // Clone for shutdown signal before moving into make_svc
     let shutdown_signal = callback_data.clone();
 
@@ -272,7 +296,7 @@ async fn start_callback_server(callback_data: Arc<OAuthCallback>, port: u16) -> 
         }
     });
 
-    let server = Server::bind(&addr).serve(make_svc);
+    let server = Server::from_tcp(listener)?.serve(make_svc);
 
     // Run server with graceful shutdown
     let graceful = server.with_graceful_shutdown(async move {
@@ -345,6 +369,26 @@ async fn exchange_code_for_token(
         .context("No access_token in response")
 }
 
+/// Validate OAuth scope contains only safe characters
+fn validate_scope(scope: &str) -> Result<()> {
+    if scope.is_empty() {
+        return Ok(()); // Empty scope is valid
+    }
+
+    // Allow alphanumeric, spaces, hyphens, and underscores only
+    if !scope
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_')
+    {
+        anyhow::bail!(
+            "Invalid scope '{}': only alphanumeric characters, spaces, hyphens, and underscores allowed",
+            scope
+        );
+    }
+
+    Ok(())
+}
+
 /// Perform OAuth authentication flow
 pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
     // Load config to get client_id (if configured)
@@ -358,8 +402,9 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
     println!("✓ Found authorization endpoint: {}", auth_endpoint);
     println!("✓ Found token endpoint: {}", token_endpoint);
 
-    // Find an available port for the callback server
-    let port = find_available_port()?;
+    // Find and bind to an available port for the callback server
+    let listener = find_and_bind_port()?;
+    let port = listener.local_addr()?.port();
     println!("Using port {} for OAuth callback", port);
 
     // Generate PKCE parameters
@@ -377,6 +422,7 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
 
     // Build authorization URL
     let scope = scope.unwrap_or("create update delete media");
+    validate_scope(scope)?;
     let mut auth_url = Url::parse(&auth_endpoint)?;
     auth_url
         .query_pairs_mut()
@@ -403,10 +449,7 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
     // Start local callback server in background
     let callback_data_clone = callback_data.clone();
     let server_handle =
-        tokio::spawn(async move { start_callback_server(callback_data_clone, port).await });
-
-    // Give server a moment to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        tokio::spawn(async move { start_callback_server(callback_data_clone, listener).await });
 
     // Open browser
     if let Err(e) = open::that(auth_url.as_str()) {
@@ -472,35 +515,63 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
     // Validate the token before saving it
     println!("\nValidating token...");
     let client = HttpClient::new();
-    let validation_response = client
-        .get(format!("{}?q=config", micropub_endpoint))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .context("Failed to validate token with micropub endpoint")?;
+    let validation_response = tokio::time::timeout(
+        tokio::time::Duration::from_secs(10),
+        client
+            .get(format!("{}?q=config", micropub_endpoint))
+            .header("Authorization", format!("Bearer {}", token))
+            .send(),
+    )
+    .await
+    .context("Timeout validating token (10 seconds) - micropub endpoint did not respond")??;
 
-    if !validation_response.status().is_success() {
-        let status = validation_response.status();
-        let body = validation_response
-            .text()
-            .await
-            .unwrap_or_else(|_| String::from("<unable to read response>"));
-        anyhow::bail!(
-            "Token validation failed - micropub endpoint rejected the token with status {}: {}",
-            status,
-            body
-        );
+    match validation_response.status() {
+        // Success - token is valid
+        status if status.is_success() => {
+            println!("✓ Token validated");
+        }
+        // Token is actually invalid
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            anyhow::bail!(
+                "Token validation failed - the token was rejected (status {}). The authorization server may have issued an invalid token.",
+                validation_response.status()
+            );
+        }
+        // Rate limited - token is probably valid, just can't verify right now
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            println!("⚠ Warning: Rate limited during token validation (status 429). Saving token anyway.");
+            println!("  The token is likely valid but couldn't be verified due to rate limiting.");
+        }
+        // Server error - don't reject token due to temporary issues
+        status if status.is_server_error() => {
+            println!("⚠ Warning: Micropub endpoint returned server error (status {}). Saving token anyway.", status);
+            println!("  The token is likely valid but couldn't be verified due to server issues.");
+        }
+        // Other client errors
+        status => {
+            let body = validation_response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unable to read response>"));
+            anyhow::bail!(
+                "Token validation failed with unexpected status {}: {}",
+                status,
+                body
+            );
+        }
     }
-
-    println!("✓ Token validated");
 
     // Save profile and token AFTER validation succeeds
     // (config already loaded at start of function)
     let profile_name = if domain.starts_with("http://") || domain.starts_with("https://") {
-        Url::parse(domain)?
-            .host_str()
-            .context("Invalid domain: missing host")?
-            .to_string()
+        let parsed = Url::parse(domain)?;
+        let host = parsed.host_str().context("Invalid domain: missing host")?;
+
+        // Include port in profile name if present
+        match parsed.port() {
+            Some(port) => format!("{}:{}", host, port),
+            None => host.to_string(),
+        }
     } else {
         domain.to_string()
     };
