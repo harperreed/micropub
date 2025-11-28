@@ -1,22 +1,22 @@
 // ABOUTME: Authentication and OAuth flow handling
-// ABOUTME: Performs IndieAuth discovery and token management
+// ABOUTME: Performs IndieAuth discovery and token management with PKCE
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use hyper::{Body, Request, Response, Server, StatusCode};
+use hyper::service::{make_service_fn, service_fn};
+use rand::Rng;
 use reqwest::Client as HttpClient;
 use scraper::{Html, Selector};
+use sha2::{Sha256, Digest};
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fs;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use url::Url;
 
 use crate::config::{Config, Profile, get_tokens_dir};
-
-// OAuth imports for future full OAuth implementation
-#[allow(unused_imports)]
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenResponse, TokenUrl,
-};
-#[allow(unused_imports)]
-use oauth2::basic::BasicClient;
 
 /// Discover endpoints from a domain
 async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
@@ -136,6 +136,163 @@ async fn discover_media_endpoint(micropub_endpoint: &str, token: &str) -> Result
     Ok(None)
 }
 
+/// Generate a cryptographically secure PKCE code verifier
+fn generate_code_verifier() -> String {
+    let mut rng = rand::thread_rng();
+    (0..128)
+        .map(|_| {
+            let idx = rng.gen_range(0..62);
+            match idx {
+                0..=25 => (b'A' + idx) as char,
+                26..=51 => (b'a' + (idx - 26)) as char,
+                _ => (b'0' + (idx - 52)) as char,
+            }
+        })
+        .collect()
+}
+
+/// Generate PKCE code challenge from verifier
+fn generate_code_challenge(verifier: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let hash = hasher.finalize();
+    URL_SAFE_NO_PAD.encode(hash)
+}
+
+/// Generate a random state parameter
+fn generate_state() -> String {
+    let mut rng = rand::thread_rng();
+    (0..32)
+        .map(|_| format!("{:x}", rng.gen::<u8>()))
+        .collect()
+}
+
+/// Struct to hold OAuth callback data
+#[derive(Clone)]
+struct OAuthCallback {
+    code: Arc<Mutex<Option<String>>>,
+    state: Arc<Mutex<Option<String>>>,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+/// Handle OAuth callback from authorization server
+async fn handle_callback(
+    req: Request<Body>,
+    callback_data: Arc<OAuthCallback>,
+) -> Result<Response<Body>, Infallible> {
+    let uri = req.uri();
+    let query = uri.query().unwrap_or("");
+
+    let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect();
+
+    if let Some(error) = params.get("error") {
+        *callback_data.error.lock().unwrap() = Some(error.clone());
+
+        let error_desc = params.get("error_description")
+            .map(|s| s.as_str())
+            .unwrap_or("Unknown error");
+
+        let html = format!(
+            r#"<html><body><h1>Authentication Failed</h1><p>Error: {}</p><p>{}</p><p>You can close this window.</p></body></html>"#,
+            error, error_desc
+        );
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html")
+            .body(Body::from(html))
+            .unwrap());
+    }
+
+    if let (Some(code), Some(state)) = (params.get("code"), params.get("state")) {
+        *callback_data.code.lock().unwrap() = Some(code.clone());
+        *callback_data.state.lock().unwrap() = Some(state.clone());
+
+        let html = r#"<html><body><h1>Authentication Successful!</h1><p>You can close this window and return to the terminal.</p><script>window.close();</script></body></html>"#;
+
+        return Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html")
+            .body(Body::from(html))
+            .unwrap());
+    }
+
+    let html = r#"<html><body><h1>Invalid Callback</h1><p>Missing required parameters.</p></body></html>"#;
+    Ok(Response::builder()
+        .status(StatusCode::BAD_REQUEST)
+        .header("Content-Type", "text/html")
+        .body(Body::from(html))
+        .unwrap())
+}
+
+/// Start local server to receive OAuth callback
+async fn start_callback_server(callback_data: Arc<OAuthCallback>) -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8089));
+
+    let make_svc = make_service_fn(move |_conn| {
+        let callback_data = callback_data.clone();
+        async move {
+            Ok::<_, Infallible>(service_fn(move |req| {
+                handle_callback(req, callback_data.clone())
+            }))
+        }
+    });
+
+    let server = Server::bind(&addr).serve(make_svc);
+
+    tokio::select! {
+        _ = server => {},
+        _ = tokio::time::sleep(tokio::time::Duration::from_secs(300)) => {
+            anyhow::bail!("OAuth callback timeout after 5 minutes");
+        }
+    }
+
+    Ok(())
+}
+
+/// Exchange authorization code for access token
+async fn exchange_code_for_token(
+    token_endpoint: &str,
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+    client_id: &str,
+) -> Result<String> {
+    let client = HttpClient::new();
+
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("client_id", client_id),
+        ("redirect_uri", redirect_uri),
+        ("code_verifier", code_verifier),
+    ];
+
+    let response = client
+        .post(token_endpoint)
+        .form(&params)
+        .send()
+        .await
+        .context("Failed to exchange authorization code")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_else(|_| String::from("<unable to read response>"));
+        anyhow::bail!("Token exchange failed with status {}: {}", status, body);
+    }
+
+    let token_response: serde_json::Value = response.json().await
+        .context("Failed to parse token response")?;
+
+    token_response
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .context("No access_token in response")
+}
+
 /// Perform OAuth authentication flow
 pub async fn cmd_auth(domain: &str) -> Result<()> {
     println!("Discovering endpoints for {}...", domain);
@@ -146,25 +303,106 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     println!("✓ Found authorization endpoint: {}", auth_endpoint);
     println!("✓ Found token endpoint: {}", token_endpoint);
 
-    // For now, use manual token flow
-    // TODO: Implement full OAuth flow with PKCE
+    // Generate PKCE parameters
+    let code_verifier = generate_code_verifier();
+    let code_challenge = generate_code_challenge(&code_verifier);
+    let state = generate_state();
 
-    println!("\nManual token configuration:");
-    println!("1. Visit your micropub provider's settings");
-    println!("2. Generate an API token with 'create' scope");
-    println!("3. Enter the token below");
+    // Set up OAuth parameters
+    let redirect_uri = "http://127.0.0.1:8089/callback";
+    let client_id = "https://github.com/harperreed/micropub"; // Using GitHub repo as client_id per IndieAuth spec
+
+    // Build authorization URL
+    let mut auth_url = Url::parse(&auth_endpoint)?;
+    auth_url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("state", &state)
+        .append_pair("code_challenge", &code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("scope", "create update delete media")
+        .append_pair("me", &format!("https://{}", domain));
+
+    println!("\nStarting OAuth flow...");
+    println!("Opening your browser to authenticate...");
     println!();
-    print!("Token: ");
 
-    use std::io::{self, Write};
-    io::stdout().flush()?;
+    // Set up callback receiver
+    let callback_data = Arc::new(OAuthCallback {
+        code: Arc::new(Mutex::new(None)),
+        state: Arc::new(Mutex::new(None)),
+        error: Arc::new(Mutex::new(None)),
+    });
 
-    let mut token = String::new();
-    io::stdin().read_line(&mut token)?;
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        anyhow::bail!("Token cannot be empty");
+    // Start local callback server in background
+    let callback_data_clone = callback_data.clone();
+    let server_handle = tokio::spawn(async move {
+        start_callback_server(callback_data_clone).await
+    });
+
+    // Give server a moment to start
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Open browser
+    if let Err(e) = open::that(auth_url.as_str()) {
+        println!("⚠ Could not open browser automatically: {}", e);
+        println!("Please open this URL manually:");
+        println!("{}", auth_url);
     }
+
+    println!("\nWaiting for authorization...");
+
+    // Wait for callback with timeout
+    let mut timeout_counter = 0;
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        timeout_counter += 1;
+
+        // Check for error
+        if let Some(error) = callback_data.error.lock().unwrap().clone() {
+            anyhow::bail!("Authorization failed: {}", error);
+        }
+
+        // Check for code
+        if callback_data.code.lock().unwrap().is_some() {
+            break;
+        }
+
+        // Timeout after 5 minutes
+        if timeout_counter > 600 {
+            server_handle.abort();
+            anyhow::bail!("Authorization timed out after 5 minutes");
+        }
+    }
+
+    // Extract code and state
+    let code = callback_data.code.lock().unwrap().clone()
+        .context("No authorization code received")?;
+    let received_state = callback_data.state.lock().unwrap().clone()
+        .context("No state received")?;
+
+    // Verify state matches
+    if received_state != state {
+        anyhow::bail!("State mismatch - possible CSRF attack");
+    }
+
+    // Abort the server since we have what we need
+    server_handle.abort();
+
+    println!("✓ Authorization code received");
+    println!("\nExchanging code for access token...");
+
+    // Exchange code for token
+    let token = exchange_code_for_token(
+        &token_endpoint,
+        &code,
+        &code_verifier,
+        redirect_uri,
+        client_id,
+    ).await?;
+
+    println!("✓ Access token obtained");
 
     // Discover media endpoint
     println!("\nDiscovering media endpoint...");

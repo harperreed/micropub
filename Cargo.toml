@@ -21,6 +21,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 toml = "0.8"
 regex = "1"
 lazy_static = "1.5"
+base64 = "0.21"
+sha2 = "0.10"
+rand = "0.8"
+hyper = { version = "0.14", features = ["server", "tcp", "http1"] }
+open = "5"
 
 [dev-dependencies]
 mockito = "1"
