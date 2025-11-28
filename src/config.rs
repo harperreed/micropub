@@ -109,11 +109,7 @@ impl Config {
 /// Load authentication token for a profile
 pub fn load_token(profile_name: &str) -> Result<String> {
     let tokens_dir = get_tokens_dir()?;
-    eprintln!("DEBUG load_token: Tokens dir: {:?}", tokens_dir);
-
     let token_path = tokens_dir.join(format!("{}.token", profile_name));
-    eprintln!("DEBUG load_token: Token path: {:?}", token_path);
-    eprintln!("DEBUG load_token: File exists: {}", token_path.exists());
 
     let token = fs::read_to_string(&token_path)
         .context("Token not found. Run 'micropub auth <domain>' to authenticate")?
