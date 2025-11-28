@@ -423,6 +423,26 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
     // Build authorization URL
     let scope = scope.unwrap_or("create update delete media");
     validate_scope(scope)?;
+
+    // Build "me" parameter - must match the authenticated identity
+    // Use the same scheme detection logic as endpoint discovery
+    let me_param = if domain.starts_with("http://") || domain.starts_with("https://") {
+        // Domain already has scheme, use as-is
+        domain.to_string()
+    } else {
+        // No scheme - use http:// for localhost, https:// for remote
+        let is_localhost = domain.starts_with("localhost")
+            || domain.starts_with("127.0.0.1")
+            || domain.starts_with("::1")
+            || domain.starts_with("[::1]");
+
+        if is_localhost {
+            format!("http://{}", domain)
+        } else {
+            format!("https://{}", domain)
+        }
+    };
+
     let mut auth_url = Url::parse(&auth_endpoint)?;
     auth_url
         .query_pairs_mut()
@@ -433,7 +453,7 @@ pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
         .append_pair("code_challenge", &code_challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("scope", scope)
-        .append_pair("me", &format!("https://{}", domain));
+        .append_pair("me", &me_param);
 
     println!("\nStarting OAuth flow...");
     println!("Opening your browser to authenticate...");
