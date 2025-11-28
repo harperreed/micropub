@@ -453,11 +453,11 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
         },
     );
 
-    if config.default_profile.is_empty() {
-        config.default_profile = profile_name.clone();
-    }
+    // Always set this profile as default when authenticating
+    config.default_profile = profile_name.clone();
 
     eprintln!("DEBUG: About to save config...");
+    eprintln!("DEBUG: Setting default_profile to: {}", profile_name);
     config.save()?;
     eprintln!("DEBUG: Config saved successfully");
 
