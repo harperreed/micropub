@@ -2,7 +2,7 @@
 name = "micropub"
 version = "0.1.0"
 edition = "2021"
-authors = ["Harper <harper@hey.com>"]
+authors = ["Harper <harper@nata2.org>"]
 description = "Ultra-compliant Micropub CLI for creating, updating, and managing IndieWeb posts"
 repository = "https://github.com/harperreed/micropub"
 license = "MIT"
