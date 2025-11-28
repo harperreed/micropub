@@ -2,7 +2,7 @@
 // ABOUTME: Handles requests, responses, and endpoint communication
 
 use anyhow::{Context, Result};
-use reqwest::{Client as HttpClient, header};
+use reqwest::{header, Client as HttpClient};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -32,12 +32,24 @@ impl MicropubRequest {
 
         match &self.action {
             MicropubAction::Create => {
-                obj.insert("type".to_string(), Value::Array(vec![Value::String("h-entry".to_string())]));
-                obj.insert("properties".to_string(), Value::Object(self.properties.clone()));
+                obj.insert(
+                    "type".to_string(),
+                    Value::Array(vec![Value::String("h-entry".to_string())]),
+                );
+                obj.insert(
+                    "properties".to_string(),
+                    Value::Object(self.properties.clone()),
+                );
             }
-            MicropubAction::Update { replace, add, delete } => {
+            MicropubAction::Update {
+                replace,
+                add,
+                delete,
+            } => {
                 obj.insert("action".to_string(), Value::String("update".to_string()));
-                let url = self.url.as_ref()
+                let url = self
+                    .url
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("URL required for update action"))?;
                 obj.insert("url".to_string(), Value::String(url.clone()));
 
@@ -48,20 +60,25 @@ impl MicropubRequest {
                     obj.insert("add".to_string(), Value::Object(add.clone()));
                 }
                 if !delete.is_empty() {
-                    obj.insert("delete".to_string(), Value::Array(
-                        delete.iter().map(|s| Value::String(s.clone())).collect()
-                    ));
+                    obj.insert(
+                        "delete".to_string(),
+                        Value::Array(delete.iter().map(|s| Value::String(s.clone())).collect()),
+                    );
                 }
             }
             MicropubAction::Delete => {
                 obj.insert("action".to_string(), Value::String("delete".to_string()));
-                let url = self.url.as_ref()
+                let url = self
+                    .url
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("URL required for delete action"))?;
                 obj.insert("url".to_string(), Value::String(url.clone()));
             }
             MicropubAction::Undelete => {
                 obj.insert("action".to_string(), Value::String("undelete".to_string()));
-                let url = self.url.as_ref()
+                let url = self
+                    .url
+                    .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("URL required for undelete action"))?;
                 obj.insert("url".to_string(), Value::String(url.clone()));
             }
@@ -97,7 +114,8 @@ impl MicropubClient {
     pub async fn send(&self, request: &MicropubRequest) -> Result<MicropubResponse> {
         let json = request.to_json()?;
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&self.endpoint)
             .header(header::AUTHORIZATION, format!("Bearer {}", self.token))
             .header(header::CONTENT_TYPE, "application/json")
@@ -109,7 +127,8 @@ impl MicropubClient {
         let status = response.status();
 
         // Get Location header for successful creates
-        let location = response.headers()
+        let location = response
+            .headers()
             .get(header::LOCATION)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
@@ -149,7 +168,10 @@ fn format_error_message(error: &Option<String>, description: &Option<String>) ->
             )
         }
         "invalid_request" => {
-            format!("Invalid request: {}\n\nCheck your draft format and try again", desc)
+            format!(
+                "Invalid request: {}\n\nCheck your draft format and try again",
+                desc
+            )
         }
         "unauthorized" => {
             format!(

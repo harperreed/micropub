@@ -2,13 +2,13 @@
 // ABOUTME: Performs IndieAuth discovery and token management with PKCE
 
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use hyper::{Body, Request, Response, Server, StatusCode};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Request, Response, Server, StatusCode};
 use rand::Rng;
 use reqwest::Client as HttpClient;
 use scraper::{Html, Selector};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-use crate::config::{Config, Profile, get_tokens_dir};
+use crate::config::{get_tokens_dir, Config, Profile};
 
 /// Discover endpoints from a domain
 async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
@@ -98,12 +98,11 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
         }
     }
 
-    let micropub = micropub_endpoint
-        .context("Could not find micropub endpoint in Link headers or HTML")?;
+    let micropub =
+        micropub_endpoint.context("Could not find micropub endpoint in Link headers or HTML")?;
     let auth = authorization_endpoint
         .context("Could not find authorization_endpoint in Link headers or HTML")?;
-    let token = token_endpoint
-        .context("Could not find token_endpoint in Link headers or HTML")?;
+    let token = token_endpoint.context("Could not find token_endpoint in Link headers or HTML")?;
 
     Ok((micropub, auth, token))
 }
@@ -162,9 +161,7 @@ fn generate_code_challenge(verifier: &str) -> String {
 /// Generate a random state parameter
 fn generate_state() -> String {
     let mut rng = rand::thread_rng();
-    (0..32)
-        .map(|_| format!("{:x}", rng.gen::<u8>()))
-        .collect()
+    (0..32).map(|_| format!("{:x}", rng.gen::<u8>())).collect()
 }
 
 /// Struct to hold OAuth callback data
@@ -190,7 +187,8 @@ async fn handle_callback(
     if let Some(error) = params.get("error") {
         *callback_data.error.lock().unwrap() = Some(error.clone());
 
-        let error_desc = params.get("error_description")
+        let error_desc = params
+            .get("error_description")
             .map(|s| s.as_str())
             .unwrap_or("Unknown error");
 
@@ -219,7 +217,8 @@ async fn handle_callback(
             .unwrap());
     }
 
-    let html = r#"<html><body><h1>Invalid Callback</h1><p>Missing required parameters.</p></body></html>"#;
+    let html =
+        r#"<html><body><h1>Invalid Callback</h1><p>Missing required parameters.</p></body></html>"#;
     Ok(Response::builder()
         .status(StatusCode::BAD_REQUEST)
         .header("Content-Type", "text/html")
@@ -250,8 +249,9 @@ async fn start_callback_server(callback_data: Arc<OAuthCallback>) -> Result<()> 
         // Wait until we have a code or error
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            if shutdown_signal.code.lock().unwrap().is_some() ||
-               shutdown_signal.error.lock().unwrap().is_some() {
+            if shutdown_signal.code.lock().unwrap().is_some()
+                || shutdown_signal.error.lock().unwrap().is_some()
+            {
                 break;
             }
         }
@@ -296,11 +296,16 @@ async fn exchange_code_for_token(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| String::from("<unable to read response>"));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unable to read response>"));
         anyhow::bail!("Token exchange failed with status {}: {}", status, body);
     }
 
-    let token_response: serde_json::Value = response.json().await
+    let token_response: serde_json::Value = response
+        .json()
+        .await
         .context("Failed to parse token response")?;
 
     token_response
@@ -331,7 +336,8 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
 
     // Build authorization URL
     let mut auth_url = Url::parse(&auth_endpoint)?;
-    auth_url.query_pairs_mut()
+    auth_url
+        .query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", client_id)
         .append_pair("redirect_uri", redirect_uri)
@@ -354,9 +360,8 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
 
     // Start local callback server in background
     let callback_data_clone = callback_data.clone();
-    let server_handle = tokio::spawn(async move {
-        start_callback_server(callback_data_clone).await
-    });
+    let server_handle =
+        tokio::spawn(async move { start_callback_server(callback_data_clone).await });
 
     // Give server a moment to start
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -371,7 +376,17 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     println!("\nWaiting for authorization...");
 
     // Wait for the server to complete (it will shut down automatically after receiving callback)
-    let _ = server_handle.await;
+    match server_handle.await {
+        Ok(Ok(())) => {
+            // Server completed successfully
+        }
+        Ok(Err(e)) => {
+            anyhow::bail!("OAuth callback server error: {}", e);
+        }
+        Err(e) => {
+            anyhow::bail!("OAuth server task panicked: {}", e);
+        }
+    }
 
     // Check for error
     if let Some(error) = callback_data.error.lock().unwrap().clone() {
@@ -379,9 +394,17 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     }
 
     // Extract code and state
-    let code = callback_data.code.lock().unwrap().clone()
+    let code = callback_data
+        .code
+        .lock()
+        .unwrap()
+        .clone()
         .context("No authorization code received")?;
-    let received_state = callback_data.state.lock().unwrap().clone()
+    let received_state = callback_data
+        .state
+        .lock()
+        .unwrap()
+        .clone()
         .context("No state received")?;
 
     // Verify state matches
@@ -399,7 +422,8 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
         &code_verifier,
         redirect_uri,
         client_id,
-    ).await?;
+    )
+    .await?;
 
     println!("✓ Access token obtained");
 
@@ -448,7 +472,10 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
         fs::set_permissions(&token_path, perms)?;
     }
 
-    println!("\n✓ Authentication configured for profile: {}", profile_name);
+    println!(
+        "\n✓ Authentication configured for profile: {}",
+        profile_name
+    );
 
     Ok(())
 }

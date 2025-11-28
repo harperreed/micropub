@@ -1,12 +1,12 @@
 // ABOUTME: Main library file for micropub CLI
 // ABOUTME: Exports all public modules and types
 
-pub mod config;
 pub mod auth;
-pub mod draft;
 pub mod client;
+pub mod config;
+pub mod draft;
 pub mod media;
-pub mod publish;
 pub mod operations;
+pub mod publish;
 
-pub use anyhow::{Result, Error};
+pub use anyhow::{Error, Result};

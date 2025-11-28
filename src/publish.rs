@@ -5,10 +5,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use crate::client::{MicropubClient, MicropubRequest, MicropubAction};
-use crate::config::{Config, load_token};
+use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
+use crate::config::{load_token, Config};
 use crate::draft::Draft;
-use crate::media::{find_media_references, resolve_path, upload_file, replace_paths};
+use crate::media::{find_media_references, replace_paths, resolve_path, upload_file};
 
 pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> Result<()> {
     // Extract draft ID from path
@@ -24,11 +24,15 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
     let config = Config::load()?;
 
     // Determine which profile to use
-    let profile_name = draft.metadata.profile.as_deref()
+    let profile_name = draft
+        .metadata
+        .profile
+        .as_deref()
         .or(Some(config.default_profile.as_str()))
         .context("No profile specified and no default profile set")?;
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .context(format!("Profile not found: {}", profile_name))?;
 
     // Load token
@@ -63,36 +67,67 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
 
     // Build micropub request
     let mut properties = Map::new();
-    properties.insert("content".to_string(), Value::Array(vec![Value::String(final_content)]));
+    properties.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String(final_content)]),
+    );
 
     if let Some(name) = &draft.metadata.name {
-        properties.insert("name".to_string(), Value::Array(vec![Value::String(name.clone())]));
+        properties.insert(
+            "name".to_string(),
+            Value::Array(vec![Value::String(name.clone())]),
+        );
     }
 
     if !draft.metadata.category.is_empty() {
-        properties.insert("category".to_string(), Value::Array(
-            draft.metadata.category.iter().map(|c| Value::String(c.clone())).collect()
-        ));
+        properties.insert(
+            "category".to_string(),
+            Value::Array(
+                draft
+                    .metadata
+                    .category
+                    .iter()
+                    .map(|c| Value::String(c.clone()))
+                    .collect(),
+            ),
+        );
     }
 
     if !draft.metadata.photo.is_empty() {
-        properties.insert("photo".to_string(), Value::Array(
-            draft.metadata.photo.iter().map(|p| Value::String(p.clone())).collect()
-        ));
+        properties.insert(
+            "photo".to_string(),
+            Value::Array(
+                draft
+                    .metadata
+                    .photo
+                    .iter()
+                    .map(|p| Value::String(p.clone()))
+                    .collect(),
+            ),
+        );
     }
 
     if !draft.metadata.syndicate_to.is_empty() {
-        properties.insert("mp-syndicate-to".to_string(), Value::Array(
-            draft.metadata.syndicate_to.iter().map(|s| Value::String(s.clone())).collect()
-        ));
+        properties.insert(
+            "mp-syndicate-to".to_string(),
+            Value::Array(
+                draft
+                    .metadata
+                    .syndicate_to
+                    .iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect(),
+            ),
+        );
     }
 
     // Handle published date (backdate or from draft)
     let published_date = backdate.or(draft.metadata.published);
     if let Some(date) = published_date {
-        properties.insert("published".to_string(), Value::Array(vec![
-            Value::String(date.to_rfc3339())
-        ]));
+        properties.insert(
+            "published".to_string(),
+            Value::Array(vec![Value::String(date.to_rfc3339())]),
+        );
     }
 
     let request = MicropubRequest {
@@ -102,7 +137,9 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
     };
 
     // Send request
-    let micropub_endpoint = profile.micropub_endpoint.as_ref()
+    let micropub_endpoint = profile
+        .micropub_endpoint
+        .as_ref()
         .context("No micropub endpoint configured for this profile")?;
 
     let client = MicropubClient::new(micropub_endpoint.clone(), token);

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use uuid::Uuid;
 
-use crate::config::{get_drafts_dir, get_archive_dir, Config};
+use crate::config::{get_archive_dir, get_drafts_dir, Config};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -76,8 +76,8 @@ impl Draft {
         let frontmatter = parts[1].trim();
         let content = parts[2].trim().to_string();
 
-        let metadata: DraftMetadata = serde_yaml::from_str(frontmatter)
-            .context("Failed to parse frontmatter")?;
+        let metadata: DraftMetadata =
+            serde_yaml::from_str(frontmatter).context("Failed to parse frontmatter")?;
 
         Ok(Self {
             id,
@@ -94,15 +94,14 @@ impl Draft {
         }
 
         let path = get_drafts_dir()?.join(format!("{}.md", id));
-        let contents = fs::read_to_string(&path)
-            .context("Failed to read draft file")?;
+        let contents = fs::read_to_string(&path).context("Failed to read draft file")?;
         Self::from_string(id.to_string(), contents)
     }
 
     /// Serialize draft to string (YAML frontmatter + content)
     pub fn to_string(&self) -> Result<String> {
-        let frontmatter = serde_yaml::to_string(&self.metadata)
-            .context("Failed to serialize frontmatter")?;
+        let frontmatter =
+            serde_yaml::to_string(&self.metadata).context("Failed to serialize frontmatter")?;
 
         Ok(format!("---\n{}---\n\n{}", frontmatter, self.content))
     }
@@ -111,8 +110,7 @@ impl Draft {
     pub fn save(&self) -> Result<PathBuf> {
         let path = get_drafts_dir()?.join(format!("{}.md", self.id));
         let contents = self.to_string()?;
-        fs::write(&path, contents)
-            .context("Failed to write draft file")?;
+        fs::write(&path, contents).context("Failed to write draft file")?;
         Ok(path)
     }
 
@@ -120,8 +118,7 @@ impl Draft {
     pub fn archive(&self) -> Result<PathBuf> {
         let archive_path = get_archive_dir()?.join(format!("{}.md", self.id));
         let contents = self.to_string()?;
-        fs::write(&archive_path, contents)
-            .context("Failed to write archived draft")?;
+        fs::write(&archive_path, contents).context("Failed to write archived draft")?;
 
         // Remove from drafts directory
         let draft_path = get_drafts_dir()?.join(format!("{}.md", self.id));
@@ -167,7 +164,8 @@ pub fn cmd_new() -> Result<()> {
 
     // Open in editor
     let config = Config::load()?;
-    let editor = config.editor
+    let editor = config
+        .editor
         .or_else(|| std::env::var("EDITOR").ok())
         .unwrap_or_else(|| "vim".to_string());
 
@@ -196,7 +194,8 @@ pub fn cmd_edit(draft_id: &str) -> Result<()> {
     }
 
     let config = Config::load()?;
-    let editor = config.editor
+    let editor = config
+        .editor
         .or_else(|| std::env::var("EDITOR").ok())
         .unwrap_or_else(|| "vim".to_string());
 
@@ -221,7 +220,9 @@ pub fn cmd_list() -> Result<()> {
     for id in draft_ids {
         match Draft::load(&id) {
             Ok(draft) => {
-                let title = draft.metadata.name
+                let title = draft
+                    .metadata
+                    .name
                     .unwrap_or_else(|| "[untitled]".to_string());
                 let post_type = &draft.metadata.post_type;
                 println!("  {} - {} ({})", id, title, post_type);

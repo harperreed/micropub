@@ -13,8 +13,8 @@ category:
 This is the post content.
 "#;
 
-    let draft = Draft::from_string("test-id".to_string(), content.to_string())
-        .expect("Should parse draft");
+    let draft =
+        Draft::from_string("test-id".to_string(), content.to_string()).expect("Should parse draft");
 
     assert_eq!(draft.metadata.name, Some("Test Post".to_string()));
     assert_eq!(draft.metadata.category, vec!["rust", "micropub"]);
@@ -50,9 +50,11 @@ fn test_cmd_show_error_missing_draft() {
     // Verify the error message contains useful information
     if let Err(e) = result {
         let error_msg = format!("{:?}", e);
-        assert!(error_msg.contains("Failed to read draft file") ||
-                error_msg.contains("No such file or directory"),
-                "Error should mention file not found");
+        assert!(
+            error_msg.contains("Failed to read draft file")
+                || error_msg.contains("No such file or directory"),
+            "Error should mention file not found"
+        );
     }
 }
 
@@ -61,5 +63,8 @@ fn test_cmd_list_empty_directory() {
     // This test validates that cmd_list handles cases where
     // the drafts directory might be empty or newly created
     let result = micropub::draft::cmd_list();
-    assert!(result.is_ok(), "cmd_list should succeed even with no drafts");
+    assert!(
+        result.is_ok(),
+        "cmd_list should succeed even with no drafts"
+    );
 }

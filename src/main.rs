@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
                 micropub::draft::cmd_show(&draft_id)?;
                 Ok(())
             }
-        }
+        },
         Commands::Publish { draft } => {
             micropub::publish::cmd_publish(&draft, None).await?;
             Ok(())

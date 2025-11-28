@@ -1,5 +1,5 @@
-use micropub::draft::{Draft, generate_draft_id};
 use micropub::config::Config;
+use micropub::draft::{generate_draft_id, Draft};
 
 #[test]
 fn test_draft_lifecycle() {
@@ -25,8 +25,8 @@ fn test_draft_lifecycle() {
 
 #[test]
 fn test_config_roundtrip() {
-    use std::collections::HashMap;
     use micropub::config::Profile;
+    use std::collections::HashMap;
 
     let mut config = Config {
         default_profile: "test".to_string(),

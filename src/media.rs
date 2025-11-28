@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
-use reqwest::{Client as HttpClient, header, multipart};
+use reqwest::{header, multipart, Client as HttpClient};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,8 +53,7 @@ pub fn resolve_path(path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
     }
 
     let expanded = if let Some(stripped) = path.strip_prefix("~/") {
-        let home = dirs::home_dir()
-            .context("Could not determine home directory")?;
+        let home = dirs::home_dir().context("Could not determine home directory")?;
         home.join(stripped)
     } else if path.starts_with('/') {
         PathBuf::from(path)
@@ -73,11 +72,7 @@ pub fn resolve_path(path: &str, base_dir: Option<&Path>) -> Result<PathBuf> {
 }
 
 /// Upload a file to media endpoint
-pub async fn upload_file(
-    endpoint: &str,
-    token: &str,
-    file_path: &Path,
-) -> Result<String> {
+pub async fn upload_file(endpoint: &str, token: &str, file_path: &Path) -> Result<String> {
     if !file_path.exists() {
         anyhow::bail!("File not found: {}", file_path.display());
     }
@@ -87,18 +82,15 @@ pub async fn upload_file(
         .and_then(|n| n.to_str())
         .context("Invalid filename")?;
 
-    let mime_type = mime_guess::from_path(file_path)
-        .first_or_octet_stream();
+    let mime_type = mime_guess::from_path(file_path).first_or_octet_stream();
 
-    let file_bytes = fs::read(file_path)
-        .context("Failed to read file")?;
+    let file_bytes = fs::read(file_path).context("Failed to read file")?;
 
     let part = multipart::Part::bytes(file_bytes)
         .file_name(filename.to_string())
         .mime_str(mime_type.as_ref())?;
 
-    let form = multipart::Form::new()
-        .part("file", part);
+    let form = multipart::Form::new().part("file", part);
 
     let client = HttpClient::new();
     let response = client
@@ -111,7 +103,10 @@ pub async fn upload_file(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| String::from("<unable to read response body>"));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unable to read response body>"));
         anyhow::bail!("Upload failed with status {}: {}", status, body);
     }
 
@@ -152,9 +147,10 @@ mod tests {
     #[test]
     fn test_replace_paths() {
         let content = "Image: ![](~/photo.jpg) here";
-        let replacements = vec![
-            ("~/photo.jpg".to_string(), "https://cdn.com/abc.jpg".to_string())
-        ];
+        let replacements = vec![(
+            "~/photo.jpg".to_string(),
+            "https://cdn.com/abc.jpg".to_string(),
+        )];
 
         let result = replace_paths(content, &replacements);
         assert!(result.contains("https://cdn.com/abc.jpg"));

@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use reqwest::Client as HttpClient;
 use serde_json::{Map, Value};
 
-use crate::client::{MicropubClient, MicropubRequest, MicropubAction};
-use crate::config::{Config, load_token};
+use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
+use crate::config::{load_token, Config};
 
 pub async fn cmd_update(url: &str) -> Result<()> {
     println!("Update operation not yet implemented for: {}", url);
@@ -22,12 +22,15 @@ pub async fn cmd_delete(post_url: &str) -> Result<()> {
         anyhow::bail!("No default profile set. Run 'micropub auth' first");
     }
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .context("Profile not found")?;
 
     let token = load_token(profile_name)?;
 
-    let micropub_endpoint = profile.micropub_endpoint.as_ref()
+    let micropub_endpoint = profile
+        .micropub_endpoint
+        .as_ref()
         .context("No micropub endpoint configured")?;
 
     let request = MicropubRequest {
@@ -54,12 +57,15 @@ pub async fn cmd_undelete(post_url: &str) -> Result<()> {
         anyhow::bail!("No default profile set. Run 'micropub auth' first");
     }
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .context("Profile not found")?;
 
     let token = load_token(profile_name)?;
 
-    let micropub_endpoint = profile.micropub_endpoint.as_ref()
+    let micropub_endpoint = profile
+        .micropub_endpoint
+        .as_ref()
         .context("No micropub endpoint configured")?;
 
     let request = MicropubRequest {
@@ -86,12 +92,15 @@ pub async fn cmd_whoami() -> Result<()> {
         anyhow::bail!("No profile configured. Run 'micropub auth' first");
     }
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .context("Profile not found")?;
 
     let token = load_token(profile_name)?;
 
-    let micropub_endpoint = profile.micropub_endpoint.as_ref()
+    let micropub_endpoint = profile
+        .micropub_endpoint
+        .as_ref()
         .context("No micropub endpoint configured")?;
 
     // Query the micropub endpoint for user info
@@ -127,12 +136,15 @@ pub async fn cmd_list_posts(limit: usize) -> Result<()> {
         anyhow::bail!("No profile configured. Run 'micropub auth' first");
     }
 
-    let profile = config.get_profile(profile_name)
+    let profile = config
+        .get_profile(profile_name)
         .context("Profile not found")?;
 
     let token = load_token(profile_name)?;
 
-    let micropub_endpoint = profile.micropub_endpoint.as_ref()
+    let micropub_endpoint = profile
+        .micropub_endpoint
+        .as_ref()
         .context("No micropub endpoint configured")?;
 
     // Query for posts using the source query
@@ -146,12 +158,14 @@ pub async fn cmd_list_posts(limit: usize) -> Result<()> {
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().await.unwrap_or_else(|_| String::from("<unable to read response>"));
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unable to read response>"));
         anyhow::bail!("Failed to list posts: HTTP {}\n{}", status, body);
     }
 
-    let data: Value = response.json().await
-        .context("Failed to parse response")?;
+    let data: Value = response.json().await.context("Failed to parse response")?;
 
     // The response format can vary, but typically has "items" array
     if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
@@ -164,23 +178,27 @@ pub async fn cmd_list_posts(limit: usize) -> Result<()> {
         println!();
 
         for (idx, item) in items.iter().enumerate() {
-            let properties = item.get("properties")
+            let properties = item
+                .get("properties")
                 .context("Missing properties in post")?;
 
             // Get URL
-            let url = properties.get("url")
+            let url = properties
+                .get("url")
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no URL)");
 
             // Get content or name
-            let content = properties.get("content")
+            let content = properties
+                .get("content")
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|v| v.as_str())
                 .or_else(|| {
-                    properties.get("name")
+                    properties
+                        .get("name")
                         .and_then(|v| v.as_array())
                         .and_then(|arr| arr.first())
                         .and_then(|v| v.as_str())
@@ -188,7 +206,8 @@ pub async fn cmd_list_posts(limit: usize) -> Result<()> {
                 .unwrap_or("(no content)");
 
             // Get published date
-            let published = properties.get("published")
+            let published = properties
+                .get("published")
                 .and_then(|v| v.as_array())
                 .and_then(|arr| arr.first())
                 .and_then(|v| v.as_str())

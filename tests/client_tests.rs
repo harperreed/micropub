@@ -1,4 +1,4 @@
-use micropub::client::{MicropubRequest, MicropubAction};
+use micropub::client::{MicropubAction, MicropubRequest};
 use serde_json::json;
 
 #[test]
