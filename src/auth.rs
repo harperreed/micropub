@@ -457,11 +457,20 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
         config.default_profile = profile_name.clone();
     }
 
+    eprintln!("DEBUG: About to save config...");
     config.save()?;
+    eprintln!("DEBUG: Config saved successfully");
 
     // Save token
-    let token_path = get_tokens_dir()?.join(format!("{}.token", profile_name));
-    fs::write(&token_path, token)?;
+    eprintln!("DEBUG: Getting tokens directory...");
+    let tokens_dir = get_tokens_dir()?;
+    eprintln!("DEBUG: Tokens dir: {:?}", tokens_dir);
+
+    let token_path = tokens_dir.join(format!("{}.token", profile_name));
+    eprintln!("DEBUG: Token path: {:?}", token_path);
+    eprintln!("DEBUG: Writing token...");
+    fs::write(&token_path, &token)?;
+    eprintln!("DEBUG: Token written successfully");
 
     // Set restrictive permissions on token file (Unix only)
     #[cfg(unix)]
