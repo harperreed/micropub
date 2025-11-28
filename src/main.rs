@@ -68,6 +68,12 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         limit: usize,
     },
+    /// List uploaded media files
+    Media {
+        /// Number of media items to show (default: 20)
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -80,11 +86,20 @@ enum DraftCommands {
         draft_id: String,
     },
     /// List all drafts
-    List,
+    List {
+        /// Filter by category
+        #[arg(long)]
+        category: Option<String>,
+    },
     /// Show a draft's content
     Show {
         /// Draft ID to show
         draft_id: String,
+    },
+    /// Search drafts by content or metadata
+    Search {
+        /// Search query
+        query: String,
     },
 }
 
@@ -106,12 +121,16 @@ async fn main() -> Result<()> {
                 micropub::draft::cmd_edit(&draft_id)?;
                 Ok(())
             }
-            DraftCommands::List => {
-                micropub::draft::cmd_list()?;
+            DraftCommands::List { category } => {
+                micropub::draft::cmd_list(category.as_deref())?;
                 Ok(())
             }
             DraftCommands::Show { draft_id } => {
                 micropub::draft::cmd_show(&draft_id)?;
+                Ok(())
+            }
+            DraftCommands::Search { query } => {
+                micropub::draft::cmd_search(&query)?;
                 Ok(())
             }
         },
@@ -149,6 +168,10 @@ async fn main() -> Result<()> {
         }
         Commands::Posts { limit } => {
             micropub::operations::cmd_list_posts(limit).await?;
+            Ok(())
+        }
+        Commands::Media { limit } => {
+            micropub::operations::cmd_list_media(limit).await?;
             Ok(())
         }
     }

@@ -207,8 +207,8 @@ pub fn cmd_edit(draft_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// List all drafts
-pub fn cmd_list() -> Result<()> {
+/// List all drafts with optional category filter
+pub fn cmd_list(category_filter: Option<&str>) -> Result<()> {
     let draft_ids = Draft::list_all()?;
 
     if draft_ids.is_empty() {
@@ -216,21 +216,130 @@ pub fn cmd_list() -> Result<()> {
         return Ok(());
     }
 
-    println!("Drafts:");
+    let mut filtered_count = 0;
+
+    if let Some(filter) = category_filter {
+        println!("Drafts with category '{}':", filter);
+    } else {
+        println!("Drafts:");
+    }
+
     for id in draft_ids {
         match Draft::load(&id) {
             Ok(draft) => {
+                // Apply category filter if provided
+                if let Some(filter) = category_filter {
+                    if !draft.metadata.category.iter().any(|c| c == filter) {
+                        continue;
+                    }
+                }
+
+                filtered_count += 1;
+
                 let title = draft
                     .metadata
                     .name
                     .unwrap_or_else(|| "[untitled]".to_string());
                 let post_type = &draft.metadata.post_type;
-                println!("  {} - {} ({})", id, title, post_type);
+                let categories = if draft.metadata.category.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", draft.metadata.category.join(", "))
+                };
+                println!("  {} - {} ({}){}", id, title, post_type, categories);
             }
             Err(_) => {
                 println!("  {} - [error loading]", id);
             }
         }
+    }
+
+    if filtered_count == 0 && category_filter.is_some() {
+        println!("  No drafts found with that category.");
+    }
+
+    Ok(())
+}
+
+/// Search drafts by content or metadata
+pub fn cmd_search(query: &str) -> Result<()> {
+    let draft_ids = Draft::list_all()?;
+
+    if draft_ids.is_empty() {
+        println!("No drafts found.");
+        return Ok(());
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut found_count = 0;
+
+    println!("Searching for '{}'...\n", query);
+
+    for id in draft_ids {
+        match Draft::load(&id) {
+            Ok(draft) => {
+                let mut matches = Vec::new();
+
+                // Search in title
+                if let Some(ref title) = draft.metadata.name {
+                    if title.to_lowercase().contains(&query_lower) {
+                        matches.push("title");
+                    }
+                }
+
+                // Search in content
+                if draft.content.to_lowercase().contains(&query_lower) {
+                    matches.push("content");
+                }
+
+                // Search in categories
+                if draft
+                    .metadata
+                    .category
+                    .iter()
+                    .any(|c| c.to_lowercase().contains(&query_lower))
+                {
+                    matches.push("category");
+                }
+
+                if !matches.is_empty() {
+                    found_count += 1;
+                    let title = draft
+                        .metadata
+                        .name
+                        .unwrap_or_else(|| "[untitled]".to_string());
+                    println!("{} - {}", id, title);
+                    println!("  Matched in: {}", matches.join(", "));
+
+                    // Show a snippet of content if it matched
+                    if matches.contains(&"content") {
+                        let snippet = draft
+                            .content
+                            .lines()
+                            .find(|line| line.to_lowercase().contains(&query_lower))
+                            .map(|line| {
+                                if line.len() > 80 {
+                                    format!("{}...", &line[..77])
+                                } else {
+                                    line.to_string()
+                                }
+                            })
+                            .unwrap_or_default();
+                        if !snippet.is_empty() {
+                            println!("  {}", snippet);
+                        }
+                    }
+                    println!();
+                }
+            }
+            Err(_) => continue,
+        }
+    }
+
+    if found_count == 0 {
+        println!("No drafts found matching '{}'.", query);
+    } else {
+        println!("Found {} draft(s).", found_count);
     }
 
     Ok(())
