@@ -9,5 +9,6 @@ pub mod media;
 // pub mod mcp;  // Blocked: rmcp macro issues persist in v0.8 and v0.9
 pub mod operations;
 pub mod publish;
+pub mod tui;
 
 pub use anyhow::{Error, Result};

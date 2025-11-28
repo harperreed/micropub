@@ -3,13 +3,30 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use is_terminal::IsTerminal;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use uuid::Uuid;
 
 use crate::config::{get_archive_dir, get_drafts_dir, Config};
+
+/// Helper function to prompt user for showing more results
+fn prompt_for_more() -> Result<bool> {
+    if !io::stdout().is_terminal() {
+        return Ok(false);
+    }
+
+    print!("Show more results? [y/n]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    Ok(input.trim().eq_ignore_ascii_case("y"))
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
@@ -208,57 +225,100 @@ pub fn cmd_edit(draft_id: &str) -> Result<()> {
 }
 
 /// List all drafts with optional category filter
-pub fn cmd_list(category_filter: Option<&str>) -> Result<()> {
-    let draft_ids = Draft::list_all()?;
+pub fn cmd_list(category_filter: Option<&str>, limit: usize, offset: usize) -> Result<()> {
+    let mut all_draft_ids = Draft::list_all()?;
 
-    if draft_ids.is_empty() {
+    if all_draft_ids.is_empty() {
         println!("No drafts found.");
         return Ok(());
     }
 
-    let mut filtered_count = 0;
+    // Sort for consistent ordering
+    all_draft_ids.sort();
 
-    if let Some(filter) = category_filter {
-        println!("Drafts with category '{}':", filter);
+    // Apply category filter first to get filtered list
+    let filtered_drafts: Vec<_> = if let Some(filter) = category_filter {
+        all_draft_ids
+            .into_iter()
+            .filter_map(|id| {
+                Draft::load(&id).ok().and_then(|draft| {
+                    if draft.metadata.category.iter().any(|c| c == filter) {
+                        Some((id, draft))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
     } else {
-        println!("Drafts:");
+        all_draft_ids
+            .into_iter()
+            .filter_map(|id| Draft::load(&id).ok().map(|draft| (id, draft)))
+            .collect()
+    };
+
+    if filtered_drafts.is_empty() {
+        if category_filter.is_some() {
+            println!("No drafts found with that category.");
+        } else {
+            println!("No drafts found.");
+        }
+        return Ok(());
     }
 
-    for id in draft_ids {
-        match Draft::load(&id) {
-            Ok(draft) => {
-                // Apply category filter if provided
-                if let Some(filter) = category_filter {
-                    if !draft.metadata.category.iter().any(|c| c == filter) {
-                        continue;
-                    }
-                }
+    let mut current_offset = offset;
+    let mut first_page = true;
 
-                filtered_count += 1;
+    loop {
+        let page_items: Vec<_> = filtered_drafts
+            .iter()
+            .skip(current_offset)
+            .take(limit)
+            .collect();
 
-                let title = draft
-                    .metadata
-                    .name
-                    .unwrap_or_else(|| "[untitled]".to_string());
-                let post_type = &draft.metadata.post_type;
-                let categories = if draft.metadata.category.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}]", draft.metadata.category.join(", "))
-                };
-                println!("  {} - {} ({}){}", id, title, post_type, categories);
+        if page_items.is_empty() {
+            if first_page {
+                println!("No drafts found at offset {}.", current_offset);
+            } else {
+                println!("No more drafts.");
             }
-            Err(_) => {
-                println!("  {} - [error loading]", id);
+            return Ok(());
+        }
+
+        if first_page {
+            if let Some(filter) = category_filter {
+                println!("Drafts with category '{}':", filter);
+            } else {
+                println!("Drafts:");
             }
         }
-    }
 
-    if filtered_count == 0 && category_filter.is_some() {
-        println!("  No drafts found with that category.");
-    }
+        for (id, draft) in page_items {
+            let title = draft.metadata.name.as_deref().unwrap_or("[untitled]");
+            let post_type = &draft.metadata.post_type;
+            let categories = if draft.metadata.category.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", draft.metadata.category.join(", "))
+            };
+            println!("  {} - {} ({}){}", id, title, post_type, categories);
+        }
 
-    Ok(())
+        // Check if there are more results
+        let remaining = filtered_drafts.len().saturating_sub(current_offset + limit);
+        if remaining == 0 {
+            // No more results
+            return Ok(());
+        }
+
+        // Prompt for more results if in TTY mode
+        if !prompt_for_more()? {
+            return Ok(());
+        }
+
+        current_offset += limit;
+        first_page = false;
+    }
 }
 
 /// Search drafts by content or metadata

@@ -1,0 +1,3 @@
+[default.extend-words]
+# ratatui is the correct name of the TUI library, not ratatouille
+ratatui = "ratatui"

@@ -2,11 +2,28 @@
 // ABOUTME: Handles modifications to existing posts and queries
 
 use anyhow::{Context, Result};
+use is_terminal::IsTerminal;
 use reqwest::Client as HttpClient;
 use serde_json::{Map, Value};
+use std::io::{self, Write};
 
 use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
 use crate::config::{load_token, Config};
+
+/// Helper function to prompt user for showing more results
+fn prompt_for_more() -> Result<bool> {
+    if !io::stdout().is_terminal() {
+        return Ok(false);
+    }
+
+    print!("Show more results? [y/n]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+
+    Ok(input.trim().eq_ignore_ascii_case("y"))
+}
 
 pub async fn cmd_update(post_url: &str) -> Result<()> {
     let config = Config::load()?;
@@ -318,7 +335,7 @@ pub async fn cmd_whoami() -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_list_posts(limit: usize) -> Result<()> {
+pub async fn cmd_list_posts(limit: usize, offset: usize) -> Result<()> {
     let config = Config::load()?;
 
     let profile_name = &config.default_profile;
@@ -337,93 +354,125 @@ pub async fn cmd_list_posts(limit: usize) -> Result<()> {
         .as_ref()
         .context("No micropub endpoint configured")?;
 
-    // Query for posts using the source query
-    let client = HttpClient::new();
-    let response = client
-        .get(format!("{}?q=source&limit={}", micropub_endpoint, limit))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .context("Failed to query posts")?;
+    let mut current_offset = offset;
+    let mut first_page = true;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
+    loop {
+        // Query for posts using the source query with offset
+        let client = HttpClient::new();
+        let mut url = format!("{}?q=source&limit={}", micropub_endpoint, limit);
+        if current_offset > 0 {
+            url.push_str(&format!("&offset={}", current_offset));
+        }
+
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
             .await
-            .unwrap_or_else(|_| String::from("<unable to read response>"));
-        anyhow::bail!("Failed to list posts: HTTP {}\n{}", status, body);
-    }
+            .context("Failed to query posts")?;
 
-    let data: Value = response.json().await.context("Failed to parse response")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unable to read response>"));
+            anyhow::bail!("Failed to list posts: HTTP {}\n{}", status, body);
+        }
 
-    // The response format can vary, but typically has "items" array
-    if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
-        if items.is_empty() {
-            println!("No posts found.");
+        let data: Value = response.json().await.context("Failed to parse response")?;
+
+        // The response format can vary, but typically has "items" array
+        if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
+            if items.is_empty() {
+                if first_page {
+                    println!("No posts found.");
+                } else {
+                    println!("No more posts.");
+                }
+                return Ok(());
+            }
+
+            if first_page {
+                println!("Recent posts:");
+                println!();
+            }
+
+            for (idx, item) in items.iter().enumerate() {
+                let properties = item
+                    .get("properties")
+                    .context("Missing properties in post")?;
+
+                // Get URL
+                let url = properties
+                    .get("url")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no URL)");
+
+                // Get content or name
+                let content = properties
+                    .get("content")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        properties
+                            .get("name")
+                            .and_then(|v| v.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|v| v.as_str())
+                    })
+                    .unwrap_or("(no content)");
+
+                // Get published date
+                let published = properties
+                    .get("published")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no date)");
+
+                // Truncate content for display
+                let content_preview = if content.len() > 80 {
+                    format!("{}...", &content[..77])
+                } else {
+                    content.to_string()
+                };
+
+                println!("{}. {}", current_offset + idx + 1, content_preview);
+                println!("   URL: {}", url);
+                println!("   Published: {}", published);
+                println!();
+            }
+
+            // Check if there might be more results and if we should prompt
+            let has_more = items.len() == limit;
+            if !has_more {
+                // Got fewer items than requested, no more results
+                return Ok(());
+            }
+
+            // Prompt for more results if in TTY mode
+            if !prompt_for_more()? {
+                return Ok(());
+            }
+
+            current_offset += limit;
+            first_page = false;
+        } else {
+            if first_page {
+                println!("No posts found or unexpected response format.");
+                println!("Response: {}", serde_json::to_string_pretty(&data)?);
+            }
             return Ok(());
         }
-
-        println!("Recent posts:");
-        println!();
-
-        for (idx, item) in items.iter().enumerate() {
-            let properties = item
-                .get("properties")
-                .context("Missing properties in post")?;
-
-            // Get URL
-            let url = properties
-                .get("url")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("(no URL)");
-
-            // Get content or name
-            let content = properties
-                .get("content")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    properties
-                        .get("name")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|v| v.as_str())
-                })
-                .unwrap_or("(no content)");
-
-            // Get published date
-            let published = properties
-                .get("published")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("(no date)");
-
-            // Truncate content for display
-            let content_preview = if content.len() > 80 {
-                format!("{}...", &content[..77])
-            } else {
-                content.to_string()
-            };
-
-            println!("{}. {}", idx + 1, content_preview);
-            println!("   URL: {}", url);
-            println!("   Published: {}", published);
-            println!();
-        }
-    } else {
-        println!("No posts found or unexpected response format.");
-        println!("Response: {}", serde_json::to_string_pretty(&data)?);
     }
-
-    Ok(())
 }
 
-pub async fn cmd_list_media(limit: usize) -> Result<()> {
+pub async fn cmd_list_media(limit: usize, offset: usize) -> Result<()> {
     let config = Config::load()?;
 
     let profile_name = &config.default_profile;
@@ -442,85 +491,117 @@ pub async fn cmd_list_media(limit: usize) -> Result<()> {
         .as_ref()
         .context("No micropub endpoint configured")?;
 
-    // Query for media using the source query
-    let client = HttpClient::new();
-    let response = client
-        .get(format!(
+    let mut current_offset = offset;
+    let mut first_page = true;
+
+    loop {
+        // Query for media using the source query with offset
+        let client = HttpClient::new();
+        let mut url = format!(
             "{}?q=source&limit={}&filter=photo",
             micropub_endpoint, limit
-        ))
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .context("Failed to query media")?;
+        );
+        if current_offset > 0 {
+            url.push_str(&format!("&offset={}", current_offset));
+        }
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
             .await
-            .unwrap_or_else(|_| String::from("<unable to read response>"));
-        anyhow::bail!("Failed to list media: HTTP {}\n{}", status, body);
-    }
+            .context("Failed to query media")?;
 
-    let data: Value = response.json().await.context("Failed to parse response")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| String::from("<unable to read response>"));
+            anyhow::bail!("Failed to list media: HTTP {}\n{}", status, body);
+        }
 
-    // The response format can vary, but typically has "items" array
-    if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
-        if items.is_empty() {
-            println!("No media files found.");
+        let data: Value = response.json().await.context("Failed to parse response")?;
+
+        // The response format can vary, but typically has "items" array
+        if let Some(items) = data.get("items").and_then(|v| v.as_array()) {
+            if items.is_empty() {
+                if first_page {
+                    println!("No media files found.");
+                } else {
+                    println!("No more media files.");
+                }
+                return Ok(());
+            }
+
+            if first_page {
+                println!("Recent media uploads:");
+                println!();
+            }
+
+            for (idx, item) in items.iter().enumerate() {
+                let properties = item
+                    .get("properties")
+                    .context("Missing properties in media item")?;
+
+                // Get URL
+                let url = properties
+                    .get("url")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        properties
+                            .get("photo")
+                            .and_then(|v| v.as_array())
+                            .and_then(|arr| arr.first())
+                            .and_then(|v| v.as_str())
+                    })
+                    .unwrap_or("(no URL)");
+
+                // Get published date
+                let published = properties
+                    .get("published")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(no date)");
+
+                // Get name/alt text if available
+                let name = properties
+                    .get("name")
+                    .and_then(|v| v.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|v| v.as_str());
+
+                println!("{}. {}", current_offset + idx + 1, url);
+                if let Some(n) = name {
+                    println!("   Name: {}", n);
+                }
+                println!("   Uploaded: {}", published);
+                println!();
+            }
+
+            // Check if there might be more results and if we should prompt
+            let has_more = items.len() == limit;
+            if !has_more {
+                // Got fewer items than requested, no more results
+                return Ok(());
+            }
+
+            // Prompt for more results if in TTY mode
+            if !prompt_for_more()? {
+                return Ok(());
+            }
+
+            current_offset += limit;
+            first_page = false;
+        } else {
+            if first_page {
+                println!("No media files found or unexpected response format.");
+                println!("Your server may not support media queries.");
+            }
             return Ok(());
         }
-
-        println!("Recent media uploads:");
-        println!();
-
-        for (idx, item) in items.iter().enumerate() {
-            let properties = item
-                .get("properties")
-                .context("Missing properties in media item")?;
-
-            // Get URL
-            let url = properties
-                .get("url")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    properties
-                        .get("photo")
-                        .and_then(|v| v.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|v| v.as_str())
-                })
-                .unwrap_or("(no URL)");
-
-            // Get published date
-            let published = properties
-                .get("published")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
-                .unwrap_or("(no date)");
-
-            // Get name/alt text if available
-            let name = properties
-                .get("name")
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str());
-
-            println!("{}. {}", idx + 1, url);
-            if let Some(n) = name {
-                println!("   Name: {}", n);
-            }
-            println!("   Uploaded: {}", published);
-            println!();
-        }
-    } else {
-        println!("No media files found or unexpected response format.");
-        println!("Your server may not support media queries.");
     }
-
-    Ok(())
 }

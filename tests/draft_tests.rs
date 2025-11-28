@@ -37,7 +37,7 @@ fn test_cmd_list_formats_output() {
     // Note: This test validates the cmd_list function works correctly
     // by calling it on the actual data directory. The function will
     // list whatever drafts exist in the user's drafts directory.
-    let result = micropub::draft::cmd_list(None);
+    let result = micropub::draft::cmd_list(None, 10, 0);
     assert!(result.is_ok(), "cmd_list should succeed");
 }
 
@@ -62,7 +62,7 @@ fn test_cmd_show_error_missing_draft() {
 fn test_cmd_list_empty_directory() {
     // This test validates that cmd_list handles cases where
     // the drafts directory might be empty or newly created
-    let result = micropub::draft::cmd_list(None);
+    let result = micropub::draft::cmd_list(None, 10, 0);
     assert!(
         result.is_ok(),
         "cmd_list should succeed even with no drafts"

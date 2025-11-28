@@ -3,6 +3,7 @@
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use is_terminal::IsTerminal;
 use micropub::Result;
 
 #[derive(Parser)]
@@ -14,7 +15,7 @@ struct Cli {
     verbose: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -67,12 +68,18 @@ enum Commands {
         /// Number of posts to show (default: 10)
         #[arg(short, long, default_value = "10")]
         limit: usize,
+        /// Offset for pagination (default: 0)
+        #[arg(short, long, default_value = "0")]
+        offset: usize,
     },
     /// List uploaded media files
     Media {
         /// Number of media items to show (default: 20)
         #[arg(short, long, default_value = "20")]
         limit: usize,
+        /// Offset for pagination (default: 0)
+        #[arg(short, long, default_value = "0")]
+        offset: usize,
     },
     // MCP server disabled until SDK macros are fixed
     // /// Start MCP server (Model Context Protocol)
@@ -93,6 +100,12 @@ enum DraftCommands {
         /// Filter by category
         #[arg(long)]
         category: Option<String>,
+        /// Number of drafts to show per page (default: 10)
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+        /// Offset for pagination (default: 0)
+        #[arg(short, long, default_value = "0")]
+        offset: usize,
     },
     /// Show a draft's content
     Show {
@@ -110,7 +123,37 @@ enum DraftCommands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command {
+    // If no command provided, try to launch TUI
+    if cli.command.is_none() {
+        let config = micropub::config::Config::load()?;
+
+        // Check if authenticated
+        if !config.default_profile.is_empty() {
+            // Only launch TUI if we have a TTY
+            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+                // Launch TUI
+                return micropub::tui::run().await;
+            } else {
+                // Fallback to help if not in a terminal
+                println!("Welcome to Micropub CLI!\n");
+                println!("You are authenticated as: {}", config.default_profile);
+                println!("Run with a subcommand to perform actions, or run from a terminal to use the TUI.\n");
+                println!("For more help, run:");
+                println!("  micropub --help");
+                return Ok(());
+            }
+        } else {
+            // Show help if not authenticated
+            println!("Welcome to Micropub CLI!\n");
+            println!("To get started, authenticate with your site:");
+            println!("  micropub auth <your-domain.com>\n");
+            println!("For more help, run:");
+            println!("  micropub --help");
+            return Ok(());
+        }
+    }
+
+    match cli.command.unwrap() {
         Commands::Auth { domain } => {
             micropub::auth::cmd_auth(&domain).await?;
             Ok(())
@@ -124,8 +167,12 @@ async fn main() -> Result<()> {
                 micropub::draft::cmd_edit(&draft_id)?;
                 Ok(())
             }
-            DraftCommands::List { category } => {
-                micropub::draft::cmd_list(category.as_deref())?;
+            DraftCommands::List {
+                category,
+                limit,
+                offset,
+            } => {
+                micropub::draft::cmd_list(category.as_deref(), limit, offset)?;
                 Ok(())
             }
             DraftCommands::Show { draft_id } => {
@@ -169,12 +216,12 @@ async fn main() -> Result<()> {
             micropub::operations::cmd_whoami().await?;
             Ok(())
         }
-        Commands::Posts { limit } => {
-            micropub::operations::cmd_list_posts(limit).await?;
+        Commands::Posts { limit, offset } => {
+            micropub::operations::cmd_list_posts(limit, offset).await?;
             Ok(())
         }
-        Commands::Media { limit } => {
-            micropub::operations::cmd_list_media(limit).await?;
+        Commands::Media { limit, offset } => {
+            micropub::operations::cmd_list_media(limit, offset).await?;
             Ok(())
         } // Commands::Mcp => {
           //     micropub::mcp::run_server().await?;
