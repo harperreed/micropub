@@ -137,8 +137,13 @@ fn draw_posts_list(f: &mut Frame, app: &App, area: Rect) {
             let content_part = if let Some(ref name) = post.name {
                 name.clone()
             } else {
-                // No name - show [untitled] or content preview
-                String::from("[untitled]")
+                // No name - try to extract from URL, fallback to [no title]
+                post.url
+                    .split('/')
+                    .next_back()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| String::from("[no title]"))
             };
 
             let mut display = format!("{} - {}", date_part, content_part);
