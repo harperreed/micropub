@@ -64,11 +64,11 @@ fn draw_main_content(f: &mut Frame, app: &App, area: Rect) {
         }
         Tab::Posts => {
             draw_posts_list(f, app, chunks[0]);
-            draw_info_panel(f, "Posts view - coming soon", chunks[1]);
+            draw_preview(f, app, chunks[1]);
         }
         Tab::Media => {
             draw_media_list(f, app, chunks[0]);
-            draw_info_panel(f, "Media view - coming soon", chunks[1]);
+            draw_preview(f, app, chunks[1]);
         }
     }
 }
@@ -121,18 +121,97 @@ fn draw_drafts_list(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(list, area);
 }
 
-fn draw_posts_list(f: &mut Frame, _app: &App, area: Rect) {
-    let items: Vec<ListItem> = vec![ListItem::new("Posts view coming soon...")];
+fn draw_posts_list(f: &mut Frame, app: &App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .posts
+        .iter()
+        .enumerate()
+        .map(|(i, post)| {
+            let display_content = post.name.as_ref().unwrap_or(&post.content);
+            let mut preview = if display_content.len() > 60 {
+                format!("{}...", &display_content[..57])
+            } else {
+                display_content.to_string()
+            };
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Posts"));
+            if !post.categories.is_empty() {
+                preview.push_str(&format!(" [{}]", post.categories.join(", ")));
+            }
+
+            let style = if i == app.selected_post {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(preview).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Posts ({})", app.posts.len())),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
 
     f.render_widget(list, area);
 }
 
-fn draw_media_list(f: &mut Frame, _app: &App, area: Rect) {
-    let items: Vec<ListItem> = vec![ListItem::new("Media view coming soon...")];
+fn draw_media_list(f: &mut Frame, app: &App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .media
+        .iter()
+        .enumerate()
+        .map(|(i, media)| {
+            // Extract filename from URL for display
+            let display_name = if let Some(ref name) = media.name {
+                name.clone()
+            } else {
+                // Try to extract filename from URL
+                media
+                    .url
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&media.url)
+                    .to_string()
+            };
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Media"));
+            let mut content_str = display_name;
+            if content_str.len() > 60 {
+                content_str = format!("{}...", &content_str[..57]);
+            }
+
+            let style = if i == app.selected_media {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            ListItem::new(content_str).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!("Media ({})", app.media.len())),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
 
     f.render_widget(list, area);
 }
@@ -154,20 +233,14 @@ fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(paragraph, area);
 }
 
-fn draw_info_panel(f: &mut Frame, message: &str, area: Rect) {
-    let paragraph = Paragraph::new(message)
-        .block(Block::default().borders(Borders::ALL).title("Info"))
-        .wrap(Wrap { trim: false });
-
-    f.render_widget(paragraph, area);
-}
-
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
-    let help_text = if app.awaiting_confirmation() {
+    let help_text = if app.awaiting_date_input() {
+        "[Enter] Submit  [Esc] Cancel  [Backspace] Delete"
+    } else if app.awaiting_confirmation() {
         "[y] Yes  [n] No"
     } else {
         match app.current_tab {
-            Tab::Drafts => "[p]ublish [e]dit [d]elete [n]ew [r]efresh [q]uit",
+            Tab::Drafts => "[p]ublish [b]ackdate [e]dit [d]elete [n]ew [r]efresh [q]uit",
             Tab::Posts => "[r]efresh [q]uit",
             Tab::Media => "[r]efresh [q]uit",
         }
@@ -186,6 +259,24 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 "[Esc] to dismiss",
                 Style::default().fg(Color::DarkGray),
             )),
+        ]
+    } else if app.awaiting_date_input() {
+        let prompt = app.status_message.as_deref().unwrap_or("");
+        vec![
+            Line::from(vec![Span::styled(
+                prompt,
+                Style::default().fg(Color::Yellow),
+            )]),
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled(
+                    &app.date_input,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("_", Style::default().fg(Color::White)),
+            ]),
         ]
     } else if let Some(ref status) = app.status_message {
         vec![Line::from(vec![

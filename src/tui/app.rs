@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 
-use crate::config::{get_drafts_dir, Config};
+use crate::config::get_drafts_dir;
 use crate::draft::Draft;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,7 +25,9 @@ pub struct DraftItem {
 pub struct PostItem {
     pub url: String,
     pub content: String,
+    pub name: Option<String>,
     pub published: String,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +40,7 @@ pub struct MediaItem {
 pub enum ConfirmationAction {
     DeleteDraft(String),
     PublishDraft(String),
+    BackdateDraft(String),
     None,
 }
 
@@ -54,6 +57,7 @@ pub struct App {
     pub status_message: Option<String>,
     pub confirmation_action: ConfirmationAction,
     pub quit_requested: bool,
+    pub date_input: String,
 }
 
 impl App {
@@ -71,9 +75,12 @@ impl App {
             status_message: None,
             confirmation_action: ConfirmationAction::None,
             quit_requested: false,
+            date_input: String::new(),
         };
 
         app.load_drafts()?;
+        app.load_posts().await?;
+        app.load_media().await?;
         app.update_preview();
         Ok(app)
     }
@@ -100,6 +107,50 @@ impl App {
         Ok(())
     }
 
+    async fn load_posts(&mut self) -> Result<()> {
+        self.posts.clear();
+
+        match crate::operations::fetch_posts(20, 0).await {
+            Ok(posts) => {
+                for post in posts {
+                    self.posts.push(PostItem {
+                        url: post.url,
+                        content: post.content,
+                        name: post.name,
+                        published: post.published,
+                        categories: post.categories,
+                    });
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to load posts: {}", e));
+                Ok(())
+            }
+        }
+    }
+
+    async fn load_media(&mut self) -> Result<()> {
+        self.media.clear();
+
+        match crate::operations::fetch_media(20, 0).await {
+            Ok(media_items) => {
+                for media in media_items {
+                    self.media.push(MediaItem {
+                        url: media.url,
+                        name: media.name,
+                        uploaded: media.uploaded,
+                    });
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to load media: {}", e));
+                Ok(())
+            }
+        }
+    }
+
     pub async fn refresh(&mut self) -> Result<()> {
         self.status_message = Some("Refreshing...".to_string());
         match self.current_tab {
@@ -109,12 +160,14 @@ impl App {
                 self.status_message = Some("Drafts refreshed".to_string());
             }
             Tab::Posts => {
-                // Note: We can't easily refresh posts without refactoring cmd_list_posts
-                // to return data instead of printing it
-                self.status_message = Some("Posts view (refresh not yet implemented)".to_string());
+                self.load_posts().await?;
+                self.update_preview();
+                self.status_message = Some("Posts refreshed".to_string());
             }
             Tab::Media => {
-                self.status_message = Some("Media view (refresh not yet implemented)".to_string());
+                self.load_media().await?;
+                self.update_preview();
+                self.status_message = Some("Media refreshed".to_string());
             }
         }
         Ok(())
@@ -149,11 +202,13 @@ impl App {
             Tab::Posts => {
                 if !self.posts.is_empty() {
                     self.selected_post = (self.selected_post + 1) % self.posts.len();
+                    self.update_preview();
                 }
             }
             Tab::Media => {
                 if !self.media.is_empty() {
                     self.selected_media = (self.selected_media + 1) % self.media.len();
+                    self.update_preview();
                 }
             }
         }
@@ -178,6 +233,7 @@ impl App {
                     } else {
                         self.selected_post - 1
                     };
+                    self.update_preview();
                 }
             }
             Tab::Media => {
@@ -187,6 +243,7 @@ impl App {
                     } else {
                         self.selected_media - 1
                     };
+                    self.update_preview();
                 }
             }
         }
@@ -202,6 +259,42 @@ impl App {
                         self.preview_content = Some(content);
                     }
                 }
+            }
+        } else if self.current_tab == Tab::Posts && !self.posts.is_empty() {
+            if let Some(post_item) = self.posts.get(self.selected_post) {
+                let mut preview = String::new();
+
+                if let Some(ref name) = post_item.name {
+                    preview.push_str(&format!("Title: {}\n\n", name));
+                }
+
+                preview.push_str(&format!("URL: {}\n", post_item.url));
+                preview.push_str(&format!("Published: {}\n", post_item.published));
+
+                if !post_item.categories.is_empty() {
+                    preview.push_str(&format!(
+                        "Categories: {}\n",
+                        post_item.categories.join(", ")
+                    ));
+                }
+
+                preview.push_str("\n---\n\n");
+                preview.push_str(&post_item.content);
+
+                self.preview_content = Some(preview);
+            }
+        } else if self.current_tab == Tab::Media && !self.media.is_empty() {
+            if let Some(media_item) = self.media.get(self.selected_media) {
+                let mut preview = String::new();
+
+                preview.push_str(&format!("URL: {}\n", media_item.url));
+                preview.push_str(&format!("Uploaded: {}\n", media_item.uploaded));
+
+                if let Some(ref name) = media_item.name {
+                    preview.push_str(&format!("\nName/Alt Text:\n{}\n", name));
+                }
+
+                self.preview_content = Some(preview);
             }
         }
     }
@@ -225,32 +318,21 @@ impl App {
         Ok(())
     }
 
-    pub fn edit_item(&mut self) -> Result<()> {
+    pub fn edit_item(&mut self) -> Result<Option<String>> {
         match self.current_tab {
             Tab::Drafts => {
-                if let Some(_draft_item) = self.drafts.get(self.selected_draft) {
-                    let _config = Config::load()?;
-                    let _editor = _config
-                        .editor
-                        .or_else(|| std::env::var("EDITOR").ok())
-                        .unwrap_or_else(|| "vim".to_string());
-
-                    let _path = get_drafts_dir()?.join(format!("{}.md", _draft_item.id));
-
-                    // We need to exit the TUI temporarily to open the editor
-                    // This is a limitation - for now we'll just show an error
-                    self.error_message = Some(
-                        "Edit mode not supported in TUI. Use 'micropub draft edit <id>'"
-                            .to_string(),
-                    );
+                if let Some(draft_item) = self.drafts.get(self.selected_draft) {
+                    // Return draft ID for TUI to handle suspend/resume
+                    Ok(Some(draft_item.id.clone()))
+                } else {
+                    Ok(None)
                 }
             }
             _ => {
                 self.error_message = Some("Edit not available for this view".to_string());
+                Ok(None)
             }
         }
-
-        Ok(())
     }
 
     pub async fn delete_item(&mut self) -> Result<()> {
@@ -267,14 +349,38 @@ impl App {
     }
 
     pub async fn backdate_draft(&mut self) -> Result<()> {
-        self.error_message =
-            Some("Backdate not yet implemented in TUI. Use 'micropub backdate'".to_string());
+        if self.current_tab != Tab::Drafts || self.drafts.is_empty() {
+            return Ok(());
+        }
+
+        if let Some(draft_item) = self.drafts.get(self.selected_draft) {
+            self.confirmation_action = ConfirmationAction::BackdateDraft(draft_item.id.clone());
+            self.date_input.clear();
+            self.status_message =
+                Some("Enter date (ISO 8601, e.g., 2024-01-15T10:30:00Z):".to_string());
+        }
+
         Ok(())
     }
 
-    pub fn new_draft(&mut self) -> Result<()> {
-        self.error_message =
-            Some("New draft not yet implemented in TUI. Use 'micropub draft new'".to_string());
+    pub fn new_draft(&mut self) -> Result<String> {
+        // Generate new draft ID and return it for TUI to handle
+        Ok(crate::draft::generate_draft_id())
+    }
+
+    pub fn reload_and_select_draft(&mut self, draft_id: &str) -> Result<()> {
+        // Reload drafts
+        self.load_drafts()?;
+
+        // Find and select the new draft
+        if let Some(index) = self.drafts.iter().position(|d| d.id == draft_id) {
+            self.selected_draft = index;
+            self.update_preview();
+            self.status_message = Some(format!("Draft created: {}", draft_id));
+        } else {
+            self.error_message = Some("Draft created but not found in list".to_string());
+        }
+
         Ok(())
     }
 
@@ -315,6 +421,44 @@ impl App {
                     }
                 }
             }
+            ConfirmationAction::BackdateDraft(draft_id) => {
+                // Parse the date from date_input
+                use chrono::DateTime;
+                match DateTime::parse_from_rfc3339(&self.date_input) {
+                    Ok(parsed_date) => {
+                        self.status_message = Some("Publishing with backdate...".to_string());
+                        let parsed_date_utc = parsed_date.with_timezone(&chrono::Utc);
+
+                        let draft_path = get_drafts_dir()?.join(format!("{}.md", draft_id));
+                        let draft_path_str = draft_path.to_string_lossy().to_string();
+
+                        match crate::publish::cmd_publish(&draft_path_str, Some(parsed_date_utc))
+                            .await
+                        {
+                            Ok(_) => {
+                                self.status_message =
+                                    Some("Draft published with backdate successfully!".to_string());
+                                self.load_drafts()?;
+                                if self.selected_draft >= self.drafts.len()
+                                    && self.selected_draft > 0
+                                {
+                                    self.selected_draft -= 1;
+                                }
+                                self.update_preview();
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("Failed to publish: {}", e));
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        self.error_message = Some(
+                            "Invalid date format. Use ISO 8601 (e.g., 2024-01-15T10:30:00Z)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
             ConfirmationAction::DeleteDraft(draft_id) => {
                 let draft_path = get_drafts_dir()?.join(format!("{}.md", draft_id));
                 match std::fs::remove_file(&draft_path) {
@@ -335,11 +479,13 @@ impl App {
         }
 
         self.confirmation_action = ConfirmationAction::None;
+        self.date_input.clear();
         Ok(())
     }
 
     pub fn cancel_action(&mut self) {
         self.confirmation_action = ConfirmationAction::None;
+        self.date_input.clear();
         self.status_message = Some("Action cancelled".to_string());
     }
 
@@ -347,5 +493,20 @@ impl App {
         self.error_message = None;
         self.status_message = None;
         self.quit_requested = false;
+    }
+
+    pub fn awaiting_date_input(&self) -> bool {
+        matches!(
+            self.confirmation_action,
+            ConfirmationAction::BackdateDraft(_)
+        )
+    }
+
+    pub fn add_date_char(&mut self, c: char) {
+        self.date_input.push(c);
+    }
+
+    pub fn delete_date_char(&mut self) {
+        self.date_input.pop();
     }
 }
