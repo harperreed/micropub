@@ -127,15 +127,24 @@ fn draw_posts_list(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, post)| {
-            let display_content = post.name.as_ref().unwrap_or(&post.content);
-            let mut preview = if display_content.len() > 60 {
-                format!("{}...", &display_content[..57])
+            // Show published date and name/preview
+            let date_part = if post.published.len() >= 10 {
+                &post.published[..10] // YYYY-MM-DD
             } else {
-                display_content.to_string()
+                &post.published
             };
 
+            let content_part = if let Some(ref name) = post.name {
+                name.clone()
+            } else {
+                // No name - show [untitled] or content preview
+                String::from("[untitled]")
+            };
+
+            let mut display = format!("{} - {}", date_part, content_part);
+
             if !post.categories.is_empty() {
-                preview.push_str(&format!(" [{}]", post.categories.join(", ")));
+                display.push_str(&format!(" [{}]", post.categories.join(", ")));
             }
 
             let style = if i == app.selected_post {
@@ -146,7 +155,7 @@ fn draw_posts_list(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
-            ListItem::new(preview).style(style)
+            ListItem::new(display).style(style)
         })
         .collect();
 
@@ -171,23 +180,36 @@ fn draw_media_list(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, media)| {
-            // Extract filename from URL for display
+            // Show upload date and filename/name
+            let date_part = if media.uploaded.len() >= 10 {
+                &media.uploaded[..10] // YYYY-MM-DD
+            } else {
+                &media.uploaded
+            };
+
             let display_name = if let Some(ref name) = media.name {
-                name.clone()
+                if name.is_empty() {
+                    // Try to extract filename from URL
+                    media
+                        .url
+                        .split('/')
+                        .next_back()
+                        .unwrap_or("[unknown]")
+                        .to_string()
+                } else {
+                    name.clone()
+                }
             } else {
                 // Try to extract filename from URL
                 media
                     .url
                     .split('/')
                     .next_back()
-                    .unwrap_or(&media.url)
+                    .unwrap_or("[unknown]")
                     .to_string()
             };
 
-            let mut content_str = display_name;
-            if content_str.len() > 60 {
-                content_str = format!("{}...", &content_str[..57]);
-            }
+            let display = format!("{} - {}", date_part, display_name);
 
             let style = if i == app.selected_media {
                 Style::default()
@@ -197,7 +219,7 @@ fn draw_media_list(f: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
-            ListItem::new(content_str).style(style)
+            ListItem::new(display).style(style)
         })
         .collect();
 
