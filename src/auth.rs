@@ -427,21 +427,46 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
 
     println!("✓ Access token obtained");
 
-    // Discover media endpoint
-    println!("\nDiscovering media endpoint...");
-    let media_endpoint = discover_media_endpoint(&micropub_endpoint, &token).await?;
-
-    if let Some(ref media) = media_endpoint {
-        println!("✓ Found media endpoint: {}", media);
-    } else {
-        println!("⚠ No media endpoint found");
-    }
-
-    // Save profile
+    // Save profile and token BEFORE attempting media discovery
+    // (media discovery can fail without losing the auth token)
     let mut config = Config::load()?;
 
     let profile_name = domain.replace("https://", "").replace("http://", "");
 
+    // Save token immediately after obtaining it
+    let tokens_dir = get_tokens_dir()?;
+    let token_path = tokens_dir.join(format!("{}.token", profile_name));
+    fs::write(&token_path, &token)?;
+
+    // Set restrictive permissions on token file (Unix only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&token_path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&token_path, perms)?;
+    }
+
+    println!("✓ Token saved");
+
+    // Now discover media endpoint (non-fatal if it fails)
+    println!("\nDiscovering media endpoint...");
+    let media_endpoint = match discover_media_endpoint(&micropub_endpoint, &token).await {
+        Ok(endpoint) => {
+            if let Some(ref media) = endpoint {
+                println!("✓ Found media endpoint: {}", media);
+            } else {
+                println!("⚠ No media endpoint found");
+            }
+            endpoint
+        }
+        Err(e) => {
+            println!("⚠ Could not discover media endpoint: {}", e);
+            None
+        }
+    };
+
+    // Save profile configuration
     config.upsert_profile(
         profile_name.clone(),
         Profile {
@@ -457,20 +482,6 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     config.default_profile = profile_name.clone();
 
     config.save()?;
-
-    // Save token
-    let tokens_dir = get_tokens_dir()?;
-    let token_path = tokens_dir.join(format!("{}.token", profile_name));
-    fs::write(&token_path, &token)?;
-
-    // Set restrictive permissions on token file (Unix only)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&token_path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&token_path, perms)?;
-    }
 
     println!(
         "\n✓ Authentication configured for profile: {}",
