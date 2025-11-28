@@ -3,7 +3,6 @@
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use is_terminal::IsTerminal;
 use micropub::Result;
 
 #[derive(Parser)]
@@ -84,6 +83,8 @@ enum Commands {
         #[arg(short, long, default_value = "0")]
         offset: usize,
     },
+    /// Launch interactive TUI (Terminal User Interface)
+    Tui,
     // MCP server disabled until SDK macros are fixed
     // /// Start MCP server (Model Context Protocol)
     // Mcp,
@@ -126,34 +127,27 @@ enum DraftCommands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // If no command provided, try to launch TUI
+    // If no command provided, show help
     if cli.command.is_none() {
         let config = micropub::config::Config::load()?;
 
-        // Check if authenticated
+        println!("Welcome to Micropub CLI!\n");
+
         if !config.default_profile.is_empty() {
-            // Only launch TUI if we have a TTY
-            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-                // Launch TUI
-                return micropub::tui::run().await;
-            } else {
-                // Fallback to help if not in a terminal
-                println!("Welcome to Micropub CLI!\n");
-                println!("You are authenticated as: {}", config.default_profile);
-                println!("Run with a subcommand to perform actions, or run from a terminal to use the TUI.\n");
-                println!("For more help, run:");
-                println!("  micropub --help");
-                return Ok(());
-            }
+            println!("You are authenticated as: {}", config.default_profile);
+            println!("\nQuick commands:");
+            println!("  micropub tui              Launch interactive TUI");
+            println!("  micropub draft new        Create a new draft");
+            println!("  micropub posts            List published posts");
+            println!("  micropub whoami           Show current profile");
         } else {
-            // Show help if not authenticated
-            println!("Welcome to Micropub CLI!\n");
             println!("To get started, authenticate with your site:");
-            println!("  micropub auth <your-domain.com>\n");
-            println!("For more help, run:");
-            println!("  micropub --help");
-            return Ok(());
+            println!("  micropub auth <your-domain.com>");
         }
+
+        println!("\nFor more help, run:");
+        println!("  micropub --help");
+        return Ok(());
     }
 
     match cli.command.unwrap() {
@@ -225,6 +219,10 @@ async fn main() -> Result<()> {
         }
         Commands::Media { limit, offset } => {
             micropub::operations::cmd_list_media(limit, offset).await?;
+            Ok(())
+        }
+        Commands::Tui => {
+            micropub::tui::run().await?;
             Ok(())
         } // Commands::Mcp => {
           //     micropub::mcp::run_server().await?;
