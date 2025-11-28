@@ -38,9 +38,19 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
     // Load token
     let token = load_token(profile_name)?;
 
-    // Find and upload media
-    let media_refs = find_media_references(&draft.content);
+    // Collect all media files to upload (from content and photo metadata)
+    let mut media_refs = find_media_references(&draft.content);
+
+    // Also include photos from metadata that look like local paths
+    for photo_path in &draft.metadata.photo {
+        // Check if it's a local path (not a URL)
+        if !photo_path.starts_with("http://") && !photo_path.starts_with("https://") {
+            media_refs.push(photo_path.clone());
+        }
+    }
+
     let mut replacements = Vec::new();
+    let mut uploaded_photo_urls = Vec::new();
 
     if !media_refs.is_empty() {
         let media_endpoint = profile.media_endpoint.as_ref()
@@ -58,11 +68,16 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
             let url = upload_file(media_endpoint, &token, &resolved).await?;
             println!("    -> {}", url);
 
-            replacements.push((local_path, url));
+            replacements.push((local_path.clone(), url.clone()));
+
+            // If this was from photo metadata, save the URL
+            if draft.metadata.photo.contains(&local_path) {
+                uploaded_photo_urls.push(url);
+            }
         }
     }
 
-    // Replace local paths with URLs
+    // Replace local paths with URLs in content
     let final_content = replace_paths(&draft.content, &replacements);
 
     // Build micropub request
@@ -93,18 +108,25 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
         );
     }
 
+    // Use uploaded photo URLs if we have them, otherwise use original values (for URLs)
     if !draft.metadata.photo.is_empty() {
-        properties.insert(
-            "photo".to_string(),
-            Value::Array(
-                draft
-                    .metadata
-                    .photo
-                    .iter()
-                    .map(|p| Value::String(p.clone()))
-                    .collect(),
-            ),
-        );
+        let photo_values: Vec<Value> = if !uploaded_photo_urls.is_empty() {
+            // Use uploaded URLs
+            uploaded_photo_urls
+                .iter()
+                .map(|url| Value::String(url.clone()))
+                .collect()
+        } else {
+            // Keep original values (they must already be URLs)
+            draft
+                .metadata
+                .photo
+                .iter()
+                .map(|p| Value::String(p.clone()))
+                .collect()
+        };
+
+        properties.insert("photo".to_string(), Value::Array(photo_values));
     }
 
     if !draft.metadata.syndicate_to.is_empty() {
