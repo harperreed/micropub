@@ -3,7 +3,7 @@
 ## Goal
 Add Model Context Protocol (MCP) server support to enable AI assistants to post directly to micropub endpoints.
 
-## Current Status: IN PROGRESS
+## Current Status: BLOCKED - SDK Issues
 
 ### What's Done
 - ✅ Added rmcp dependencies (v0.8.5) to Cargo.toml
@@ -18,26 +18,23 @@ Add Model Context Protocol (MCP) server support to enable AI assistants to post 
   - `whoami` - Check authentication status
 
 ### Current Blocker
-The `#[tool_router]` macro from rmcp v0.8.5 is having compilation issues. The macro expects generated `_tool_attr` methods that aren't being created properly.
+The `#[tool_router]` macro from rmcp has persistent compilation issues in both v0.8.5 and v0.9.1. The macro expects generated `_tool_attr` methods that aren't being created properly.
 
-**Error pattern:**
+**Error pattern (both versions):**
 ```
 error[E0599]: no function or associated item named `publish_post_tool_attr` found
+error: cannot find attribute `tool` in this scope
 ```
 
-This appears to be an API mismatch or version issue with the rmcp SDK.
+**Tested versions:**
+- ❌ rmcp v0.8.5 - Same macro generation failures
+- ❌ rmcp v0.9.1 - Same macro generation failures
+
+This appears to be a fundamental issue with the rmcp SDK's procedural macros. The SDK may be in an unstable state or have undocumented requirements.
 
 ## Next Steps
 
-### Option 1: Upgrade rmcp
-Try the latest version (v0.9.1 available):
-```toml
-rmcp = "0.9"
-```
-
-Check if the macro API has changed or been fixed.
-
-### Option 2: Use Alternative MCP Implementation
+### Option 1: Manual JSON-RPC Implementation (Recommended)
 - Implement manual MCP protocol handling
 - Use stdio JSON-RPC directly
 - Reference: https://modelcontextprotocol.io/docs/concepts/architecture

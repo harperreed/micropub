@@ -6,7 +6,7 @@ pub mod client;
 pub mod config;
 pub mod draft;
 pub mod media;
-// pub mod mcp;  // TODO: Fix rmcp macro issues
+// pub mod mcp;  // Blocked: rmcp macro issues persist in v0.8 and v0.9
 pub mod operations;
 pub mod publish;
 

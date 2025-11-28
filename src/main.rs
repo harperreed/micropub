@@ -74,7 +74,7 @@ enum Commands {
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
-    // TODO: Enable once MCP module is fixed
+    // MCP server disabled until SDK macros are fixed
     // /// Start MCP server (Model Context Protocol)
     // Mcp,
 }
