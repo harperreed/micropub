@@ -60,6 +60,14 @@ enum Commands {
         /// Profile name to debug
         profile: String,
     },
+    /// Show current authenticated user
+    Whoami,
+    /// List published posts
+    Posts {
+        /// Number of posts to show (default: 10)
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,6 +141,14 @@ async fn main() -> Result<()> {
         }
         Commands::Debug { profile } => {
             println!("Debug command: {}", profile);
+            Ok(())
+        }
+        Commands::Whoami => {
+            micropub::operations::cmd_whoami().await?;
+            Ok(())
+        }
+        Commands::Posts { limit } => {
+            micropub::operations::cmd_list_posts(limit).await?;
             Ok(())
         }
     }
