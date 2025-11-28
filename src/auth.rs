@@ -231,6 +231,9 @@ async fn handle_callback(
 async fn start_callback_server(callback_data: Arc<OAuthCallback>) -> Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 8089));
 
+    // Clone for shutdown signal before moving into make_svc
+    let shutdown_signal = callback_data.clone();
+
     let make_svc = make_service_fn(move |_conn| {
         let callback_data = callback_data.clone();
         async move {
@@ -242,8 +245,22 @@ async fn start_callback_server(callback_data: Arc<OAuthCallback>) -> Result<()> 
 
     let server = Server::bind(&addr).serve(make_svc);
 
+    // Run server with graceful shutdown
+    let graceful = server.with_graceful_shutdown(async move {
+        // Wait until we have a code or error
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if shutdown_signal.code.lock().unwrap().is_some() ||
+               shutdown_signal.error.lock().unwrap().is_some() {
+                break;
+            }
+        }
+    });
+
     tokio::select! {
-        _ = server => {},
+        result = graceful => {
+            result.context("Server error")?;
+        },
         _ = tokio::time::sleep(tokio::time::Duration::from_secs(300)) => {
             anyhow::bail!("OAuth callback timeout after 5 minutes");
         }
@@ -353,27 +370,12 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
 
     println!("\nWaiting for authorization...");
 
-    // Wait for callback with timeout
-    let mut timeout_counter = 0;
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-        timeout_counter += 1;
+    // Wait for the server to complete (it will shut down automatically after receiving callback)
+    let _ = server_handle.await;
 
-        // Check for error
-        if let Some(error) = callback_data.error.lock().unwrap().clone() {
-            anyhow::bail!("Authorization failed: {}", error);
-        }
-
-        // Check for code
-        if callback_data.code.lock().unwrap().is_some() {
-            break;
-        }
-
-        // Timeout after 5 minutes
-        if timeout_counter > 600 {
-            server_handle.abort();
-            anyhow::bail!("Authorization timed out after 5 minutes");
-        }
+    // Check for error
+    if let Some(error) = callback_data.error.lock().unwrap().clone() {
+        anyhow::bail!("Authorization failed: {}", error);
     }
 
     // Extract code and state
@@ -386,9 +388,6 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     if received_state != state {
         anyhow::bail!("State mismatch - possible CSRF attack");
     }
-
-    // Abort the server since we have what we need
-    server_handle.abort();
 
     println!("✓ Authorization code received");
     println!("\nExchanging code for access token...");
