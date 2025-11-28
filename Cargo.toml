@@ -33,7 +33,7 @@ sha2 = "0.10"
 rand = "0.8"
 hyper = { version = "0.14", features = ["server", "tcp", "http1"] }
 open = "5"
-rmcp = { version = "0.9", features = ["server"] }
+rmcp = { version = "0.9", features = ["server", "transport-io"] }
 schemars = "0.8"
 ratatui = "0.28"
 crossterm = "0.28"

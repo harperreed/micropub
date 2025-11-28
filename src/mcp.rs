@@ -3,21 +3,68 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rmcp::handler::server::tool::ToolRouter;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{
+    CallToolResult, Content, ErrorCode, Implementation, ProtocolVersion, ServerCapabilities,
+    ServerInfo,
+};
+use rmcp::tool;
+use rmcp::tool_handler;
 use rmcp::tool_router;
+use rmcp::transport::stdio;
 use rmcp::ErrorData as McpError;
-use rmcp::Service;
-use tokio::io::{stdin, stdout};
+use rmcp::{schemars, ServerHandler, ServiceExt};
 
 use crate::config::Config;
 use crate::draft::Draft;
 use crate::publish;
 
+/// Parameters for publish_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PublishPostArgs {
+    /// The content of the post
+    pub content: String,
+    /// Optional title for the post
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional comma-separated categories
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
+}
+
+/// Parameters for create_draft tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CreateDraftArgs {
+    /// The content of the draft
+    pub content: String,
+    /// Optional title for the draft
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// Parameters for publish_backdate tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PublishBackdateArgs {
+    /// The draft ID to publish (alphanumeric, hyphens, underscores only)
+    #[schemars(regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+    pub draft_id: String,
+    /// ISO 8601 formatted date (e.g., 2024-01-15T10:30:00Z)
+    pub date: String,
+}
+
+/// Parameters for delete_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct DeletePostArgs {
+    /// The URL of the post to delete
+    #[schemars(url)]
+    pub url: String,
+}
+
 /// MCP server state
 #[derive(Clone)]
 pub struct MicropubMcp {
-    tool_router: ToolRouter<Self>,
+    tool_router: ToolRouter<MicropubMcp>,
 }
 
 impl MicropubMcp {
@@ -35,28 +82,52 @@ impl MicropubMcp {
     #[tool(description = "Create and publish a micropub post with optional title and categories")]
     async fn publish_post(
         &self,
-        content: String,
-        title: Option<String>,
-        categories: Option<String>,
+        Parameters(args): Parameters<PublishPostArgs>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate content is not empty
+        if args.content.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Content cannot be empty".to_string(),
+                None,
+            ));
+        }
+
         // Create a draft first
         let mut draft = Draft::new(uuid::Uuid::new_v4().to_string());
-        draft.content = content;
-        draft.metadata.name = title;
+        draft.content = args.content;
+        draft.metadata.name = args.title;
 
         // Parse categories as comma-separated
-        if let Some(cats) = categories {
+        if let Some(cats) = args.categories {
             draft.metadata.category = cats.split(',').map(|s| s.trim().to_string()).collect();
         }
 
-        let draft_path = draft
-            .save()
-            .map_err(|e| McpError::internal(format!("Failed to save draft: {}", e)))?;
+        let draft_path = draft.save().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to save draft: {}", e),
+                None,
+            )
+        })?;
 
         // Publish it
-        publish::cmd_publish(draft_path.to_str().unwrap(), None)
+        let draft_path_str = draft_path.to_str().ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Draft path contains invalid UTF-8".to_string(),
+                None,
+            )
+        })?;
+
+        publish::cmd_publish(draft_path_str, None)
             .await
-            .map_err(|e| McpError::internal(format!("Failed to publish: {}", e)))?;
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to publish: {}", e),
+                    None,
+                )
+            })?;
 
         Ok(CallToolResult::success(vec![Content::text(
             "Post published successfully!",
@@ -67,16 +138,27 @@ impl MicropubMcp {
     #[tool(description = "Create a draft micropub post for later editing and publishing")]
     async fn create_draft(
         &self,
-        content: String,
-        title: Option<String>,
+        Parameters(args): Parameters<CreateDraftArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let mut draft = Draft::new(uuid::Uuid::new_v4().to_string());
-        draft.content = content;
-        draft.metadata.name = title;
+        // Validate content is not empty
+        if args.content.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Content cannot be empty".to_string(),
+                None,
+            ));
+        }
 
-        draft
-            .save()
-            .map_err(|e| McpError::internal(format!("Failed to create draft: {}", e)))?;
+        let mut draft = Draft::new(uuid::Uuid::new_v4().to_string());
+        draft.content = args.content;
+        draft.metadata.name = args.title;
+
+        draft.save().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to create draft: {}", e),
+                None,
+            )
+        })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Draft created with ID: {}",
@@ -87,8 +169,13 @@ impl MicropubMcp {
     /// List all draft posts
     #[tool(description = "List all draft micropub posts")]
     async fn list_drafts(&self) -> Result<CallToolResult, McpError> {
-        let draft_ids = Draft::list_all()
-            .map_err(|e| McpError::internal(format!("Failed to list drafts: {}", e)))?;
+        let draft_ids = Draft::list_all().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to list drafts: {}", e),
+                None,
+            )
+        })?;
 
         if draft_ids.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
@@ -114,60 +201,123 @@ impl MicropubMcp {
     #[tool(description = "Publish a draft post with a specific past date (ISO 8601 format)")]
     async fn publish_backdate(
         &self,
-        draft_id: String,
-        date: String,
+        Parameters(args): Parameters<PublishBackdateArgs>,
     ) -> Result<CallToolResult, McpError> {
+        // Validate draft_id format to prevent path traversal
+        if args.draft_id.is_empty() {
+            return Err(McpError::invalid_params(
+                "Draft ID cannot be empty".to_string(),
+                None,
+            ));
+        }
+        if !args
+            .draft_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(McpError::invalid_params(
+                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
+                    .to_string(),
+                None,
+            ));
+        }
+
         // Parse the date
-        let parsed_date = DateTime::parse_from_rfc3339(&date)
+        let parsed_date = DateTime::parse_from_rfc3339(&args.date)
             .map_err(|e| {
-                McpError::invalid_params(format!(
-                    "Invalid date format: {}. Use ISO 8601 like 2024-01-15T10:30:00Z",
-                    e
-                ))
+                McpError::invalid_params(
+                    format!(
+                        "Invalid date format: {}. Use ISO 8601 like 2024-01-15T10:30:00Z",
+                        e
+                    ),
+                    None,
+                )
             })?
             .with_timezone(&Utc);
 
         // Load draft path
         let draft_path = crate::config::get_drafts_dir()
-            .map_err(|e| McpError::internal(format!("Failed to get drafts dir: {}", e)))?
-            .join(format!("{}.md", draft_id));
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to get drafts dir: {}", e),
+                    None,
+                )
+            })?
+            .join(format!("{}.md", args.draft_id));
 
         if !draft_path.exists() {
-            return Err(McpError::invalid_params(format!(
-                "Draft not found: {}",
-                draft_id
-            )));
+            return Err(McpError::invalid_params(
+                format!("Draft not found: {}", args.draft_id),
+                None,
+            ));
         }
 
         // Publish with backdate
-        publish::cmd_publish(draft_path.to_str().unwrap(), Some(parsed_date))
+        let draft_path_str = draft_path.to_str().ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Draft path contains invalid UTF-8".to_string(),
+                None,
+            )
+        })?;
+
+        publish::cmd_publish(draft_path_str, Some(parsed_date))
             .await
-            .map_err(|e| McpError::internal(format!("Failed to publish: {}", e)))?;
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to publish: {}", e),
+                    None,
+                )
+            })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post published with backdated timestamp: {}",
-            date
+            args.date
         ))]))
     }
 
     /// Delete a published post
     #[tool(description = "Delete a published micropub post by URL")]
-    async fn delete_post(&self, url: String) -> Result<CallToolResult, McpError> {
-        crate::operations::cmd_delete(&url)
+    async fn delete_post(
+        &self,
+        Parameters(args): Parameters<DeletePostArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate URL is not empty
+        if args.url.is_empty() {
+            return Err(McpError::invalid_params(
+                "URL cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        crate::operations::cmd_delete(&args.url)
             .await
-            .map_err(|e| McpError::internal(format!("Failed to delete post: {}", e)))?;
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to delete post: {}", e),
+                    None,
+                )
+            })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post deleted: {}",
-            url
+            args.url
         ))]))
     }
 
     /// Get authentication status
     #[tool(description = "Check which micropub account is currently authenticated")]
     async fn whoami(&self) -> Result<CallToolResult, McpError> {
-        let config = Config::load()
-            .map_err(|e| McpError::internal(format!("Failed to load config: {}", e)))?;
+        let config = Config::load().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load config: {}", e),
+                None,
+            )
+        })?;
 
         let profile_name = &config.default_profile;
         if profile_name.is_empty() {
@@ -176,9 +326,13 @@ impl MicropubMcp {
             )]));
         }
 
-        let profile = config
-            .get_profile(profile_name)
-            .ok_or_else(|| McpError::internal("Profile not found".to_string()))?;
+        let profile = config.get_profile(profile_name).ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Profile not found".to_string(),
+                None,
+            )
+        })?;
 
         let output = format!(
             "Authenticated as:\n  Profile: {}\n  Domain: {}\n  Micropub: {}",
@@ -194,18 +348,29 @@ impl MicropubMcp {
     }
 }
 
+/// Implement ServerHandler to provide server metadata
+#[tool_handler]
+impl ServerHandler for MicropubMcp {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::V_2024_11_05,
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some(
+                "Micropub MCP server for posting and managing micropub content via AI assistants"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
 /// Run the MCP server
 pub async fn run_server() -> Result<()> {
-    let server = MicropubMcp::new()?;
-
     eprintln!("Starting Micropub MCP server...");
     eprintln!("Ready to receive requests via stdio");
 
-    // Create stdio transport
-    let transport = (stdin(), stdout());
-
-    // Start serving
-    let service = server.serve(transport).await?;
+    // Create server and serve via stdio
+    let service = MicropubMcp::new()?.serve(stdio()).await?;
 
     // Wait for shutdown
     service.waiting().await?;

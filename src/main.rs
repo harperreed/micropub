@@ -85,9 +85,8 @@ enum Commands {
     },
     /// Launch interactive TUI (Terminal User Interface)
     Tui,
-    // MCP server disabled until SDK macros are fixed
-    // /// Start MCP server (Model Context Protocol)
-    // Mcp,
+    /// Start MCP server (Model Context Protocol)
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -224,9 +223,10 @@ async fn main() -> Result<()> {
         Commands::Tui => {
             micropub::tui::run().await?;
             Ok(())
-        } // Commands::Mcp => {
-          //     micropub::mcp::run_server().await?;
-          //     Ok(())
-          // }
+        }
+        Commands::Mcp => {
+            micropub::mcp::run_server().await?;
+            Ok(())
+        }
     }
 }
