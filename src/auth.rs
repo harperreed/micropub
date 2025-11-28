@@ -38,6 +38,15 @@ async fn discover_endpoints(domain: &str) -> Result<(String, String, String)> {
     // Use final URL after redirects for resolving relative links
     let final_url = response.url().to_string();
 
+    // Validate that redirects didn't downgrade us from HTTPS to HTTP
+    let final_url_parsed = Url::parse(&final_url)?;
+    if final_url_parsed.scheme() != "https" {
+        anyhow::bail!(
+            "Security error: Server redirected to insecure HTTP ({}). This is not allowed.",
+            final_url
+        );
+    }
+
     let mut micropub_endpoint = None;
     let mut authorization_endpoint = None;
     let mut token_endpoint = None;
@@ -121,10 +130,14 @@ async fn discover_media_endpoint(micropub_endpoint: &str, token: &str) -> Result
         .get(format!("{}?q=config", micropub_endpoint))
         .header("Authorization", format!("Bearer {}", token))
         .send()
-        .await?;
+        .await
+        .context("Failed to query micropub config endpoint for media discovery")?;
 
     if response.status().is_success() {
-        let config: serde_json::Value = response.json().await?;
+        let config: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse micropub config response")?;
         if let Some(media) = config.get("media-endpoint") {
             if let Some(media_str) = media.as_str() {
                 return Ok(Some(media_str.to_string()));
@@ -226,9 +239,26 @@ async fn handle_callback(
         .unwrap())
 }
 
+/// Find an available port from a list of candidates
+fn find_available_port() -> Result<u16> {
+    let candidate_ports = [8089, 8090, 8091, 8092, 8093];
+
+    for port in candidate_ports {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        if std::net::TcpListener::bind(addr).is_ok() {
+            return Ok(port);
+        }
+    }
+
+    anyhow::bail!(
+        "Could not find an available port for OAuth callback. Tried ports: {:?}",
+        candidate_ports
+    )
+}
+
 /// Start local server to receive OAuth callback
-async fn start_callback_server(callback_data: Arc<OAuthCallback>) -> Result<()> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8089));
+async fn start_callback_server(callback_data: Arc<OAuthCallback>, port: u16) -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
     // Clone for shutdown signal before moving into make_svc
     let shutdown_signal = callback_data.clone();
@@ -316,7 +346,10 @@ async fn exchange_code_for_token(
 }
 
 /// Perform OAuth authentication flow
-pub async fn cmd_auth(domain: &str) -> Result<()> {
+pub async fn cmd_auth(domain: &str, scope: Option<&str>) -> Result<()> {
+    // Load config to get client_id (if configured)
+    let mut config = Config::load()?;
+
     println!("Discovering endpoints for {}...", domain);
 
     let (micropub_endpoint, auth_endpoint, token_endpoint) = discover_endpoints(domain).await?;
@@ -325,26 +358,35 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     println!("✓ Found authorization endpoint: {}", auth_endpoint);
     println!("✓ Found token endpoint: {}", token_endpoint);
 
+    // Find an available port for the callback server
+    let port = find_available_port()?;
+    println!("Using port {} for OAuth callback", port);
+
     // Generate PKCE parameters
     let code_verifier = generate_code_verifier();
     let code_challenge = generate_code_challenge(&code_verifier);
     let state = generate_state();
 
     // Set up OAuth parameters
-    let redirect_uri = "http://127.0.0.1:8089/callback";
-    let client_id = "https://github.com/harperreed/micropub"; // Using GitHub repo as client_id per IndieAuth spec
+    let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
+    // Use configured client_id or default to GitHub repo URL
+    let client_id = config
+        .client_id
+        .as_deref()
+        .unwrap_or("https://github.com/harperreed/micropub");
 
     // Build authorization URL
+    let scope = scope.unwrap_or("create update delete media");
     let mut auth_url = Url::parse(&auth_endpoint)?;
     auth_url
         .query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", client_id)
-        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("redirect_uri", &redirect_uri)
         .append_pair("state", &state)
         .append_pair("code_challenge", &code_challenge)
         .append_pair("code_challenge_method", "S256")
-        .append_pair("scope", "create update delete media")
+        .append_pair("scope", scope)
         .append_pair("me", &format!("https://{}", domain));
 
     println!("\nStarting OAuth flow...");
@@ -361,7 +403,7 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
     // Start local callback server in background
     let callback_data_clone = callback_data.clone();
     let server_handle =
-        tokio::spawn(async move { start_callback_server(callback_data_clone).await });
+        tokio::spawn(async move { start_callback_server(callback_data_clone, port).await });
 
     // Give server a moment to start
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -420,18 +462,48 @@ pub async fn cmd_auth(domain: &str) -> Result<()> {
         &token_endpoint,
         &code,
         &code_verifier,
-        redirect_uri,
+        &redirect_uri,
         client_id,
     )
     .await?;
 
     println!("✓ Access token obtained");
 
-    // Save profile and token BEFORE attempting media discovery
-    // (media discovery can fail without losing the auth token)
-    let mut config = Config::load()?;
+    // Validate the token before saving it
+    println!("\nValidating token...");
+    let client = HttpClient::new();
+    let validation_response = client
+        .get(format!("{}?q=config", micropub_endpoint))
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("Failed to validate token with micropub endpoint")?;
 
-    let profile_name = domain.replace("https://", "").replace("http://", "");
+    if !validation_response.status().is_success() {
+        let status = validation_response.status();
+        let body = validation_response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("<unable to read response>"));
+        anyhow::bail!(
+            "Token validation failed - micropub endpoint rejected the token with status {}: {}",
+            status,
+            body
+        );
+    }
+
+    println!("✓ Token validated");
+
+    // Save profile and token AFTER validation succeeds
+    // (config already loaded at start of function)
+    let profile_name = if domain.starts_with("http://") || domain.starts_with("https://") {
+        Url::parse(domain)?
+            .host_str()
+            .context("Invalid domain: missing host")?
+            .to_string()
+    } else {
+        domain.to_string()
+    };
 
     // Save token immediately after obtaining it
     let tokens_dir = get_tokens_dir()?;

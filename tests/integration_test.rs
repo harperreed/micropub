@@ -31,6 +31,7 @@ fn test_config_roundtrip() {
     let mut config = Config {
         default_profile: "test".to_string(),
         editor: Some("vim".to_string()),
+        client_id: None,
         profiles: HashMap::new(),
     };
 

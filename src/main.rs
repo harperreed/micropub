@@ -24,6 +24,9 @@ enum Commands {
     Auth {
         /// Domain to authenticate with
         domain: String,
+        /// OAuth scope (default: "create update delete media")
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Draft management commands
     #[command(subcommand)]
@@ -154,8 +157,8 @@ async fn main() -> Result<()> {
     }
 
     match cli.command.unwrap() {
-        Commands::Auth { domain } => {
-            micropub::auth::cmd_auth(&domain).await?;
+        Commands::Auth { domain, scope } => {
+            micropub::auth::cmd_auth(&domain, scope.as_deref()).await?;
             Ok(())
         }
         Commands::Draft(cmd) => match cmd {

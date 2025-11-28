@@ -54,6 +54,7 @@ pub fn get_tokens_dir() -> Result<PathBuf> {
 pub struct Config {
     pub default_profile: String,
     pub editor: Option<String>,
+    pub client_id: Option<String>,
     pub profiles: HashMap<String, Profile>,
 }
 
@@ -82,6 +83,7 @@ impl Config {
             Ok(Config {
                 default_profile: String::new(),
                 editor: None,
+                client_id: None,
                 profiles: HashMap::new(),
             })
         }
@@ -132,6 +134,7 @@ mod tests {
         let mut config = Config {
             default_profile: "test".to_string(),
             editor: Some("vim".to_string()),
+            client_id: None,
             profiles: HashMap::new(),
         };
 
