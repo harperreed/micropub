@@ -108,42 +108,50 @@ fn default_media_limit() -> usize {
 /// Parameters for quick-note prompt
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct QuickNotePromptArgs {
-    /// The topic or subject you want to write about
+    /// The topic or subject you want to write about (1-200 characters)
+    #[schemars(length(min = 1, max = 200))]
     pub topic: String,
 }
 
 /// Parameters for photo-post prompt
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct PhotoPostPromptArgs {
-    /// What the photo is about or depicts
+    /// What the photo is about or depicts (1-200 characters)
+    #[schemars(length(min = 1, max = 200))]
     pub subject: String,
 }
 
 /// Parameters for article-draft prompt
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ArticleDraftPromptArgs {
-    /// The article topic or title
+    /// The article topic or title (1-200 characters)
+    #[schemars(length(min = 1, max = 200))]
     pub topic: String,
-    /// Key points to cover (optional)
+    /// Key points to cover (optional, max 500 characters)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 500))]
     pub key_points: Option<String>,
 }
 
 /// Parameters for backdate-memory prompt
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct BackdateMemoryPromptArgs {
-    /// What event or memory to record
+    /// What event or memory to record (1-300 characters)
+    #[schemars(length(min = 1, max = 300))]
     pub memory: String,
-    /// When it happened (e.g., "last Tuesday", "2024-01-15")
+    /// When it happened (e.g., "last Tuesday", "2024-01-15") (1-100 characters)
+    #[schemars(length(min = 1, max = 100))]
     pub when: String,
 }
 
 /// Parameters for categorized-post prompt
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct CategorizedPostPromptArgs {
-    /// The post topic
+    /// The post topic (1-200 characters)
+    #[schemars(length(min = 1, max = 200))]
     pub topic: String,
-    /// Categories for the post (comma-separated)
+    /// Categories for the post (comma-separated, 1-100 characters)
+    #[schemars(length(min = 1, max = 100))]
     pub categories: String,
 }
 
@@ -570,8 +578,16 @@ impl MicropubMcp {
     async fn quick_note(
         &self,
         Parameters(args): Parameters<QuickNotePromptArgs>,
-    ) -> GetPromptResult {
-        GetPromptResult {
+    ) -> Result<GetPromptResult, McpError> {
+        // Validate topic is not empty
+        if args.topic.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Topic cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        Ok(GetPromptResult {
             description: Some("Quick note posting workflow".to_string()),
             messages: vec![
                 PromptMessage::new_text(
@@ -586,7 +602,7 @@ impl MicropubMcp {
                     ),
                 ),
             ],
-        }
+        })
     }
 
     /// Template for posting a photo with caption
@@ -597,8 +613,16 @@ impl MicropubMcp {
     async fn photo_post(
         &self,
         Parameters(args): Parameters<PhotoPostPromptArgs>,
-    ) -> GetPromptResult {
-        GetPromptResult {
+    ) -> Result<GetPromptResult, McpError> {
+        // Validate subject is not empty
+        if args.subject.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Subject cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        Ok(GetPromptResult {
             description: Some("Photo post workflow".to_string()),
             messages: vec![
                 PromptMessage::new_text(
@@ -616,7 +640,7 @@ impl MicropubMcp {
                     ),
                 ),
             ],
-        }
+        })
     }
 
     /// Template for creating a longer article draft
@@ -627,14 +651,32 @@ impl MicropubMcp {
     async fn article_draft(
         &self,
         Parameters(args): Parameters<ArticleDraftPromptArgs>,
-    ) -> GetPromptResult {
+    ) -> Result<GetPromptResult, McpError> {
+        // Validate topic is not empty
+        if args.topic.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Topic cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        // Validate key_points if provided
+        if let Some(ref points) = args.key_points {
+            if points.trim().is_empty() {
+                return Err(McpError::invalid_params(
+                    "Key points cannot be empty if provided".to_string(),
+                    None,
+                ));
+            }
+        }
+
         let key_points_text = if let Some(ref points) = args.key_points {
             format!("\n\nKey points to cover:\n{}", points)
         } else {
             String::new()
         };
 
-        GetPromptResult {
+        Ok(GetPromptResult {
             description: Some("Article draft creation workflow".to_string()),
             messages: vec![
                 PromptMessage::new_text(
@@ -662,7 +704,7 @@ impl MicropubMcp {
                     ),
                 ),
             ],
-        }
+        })
     }
 
     /// Template for backdating a memory or past event
@@ -673,8 +715,24 @@ impl MicropubMcp {
     async fn backdate_memory(
         &self,
         Parameters(args): Parameters<BackdateMemoryPromptArgs>,
-    ) -> GetPromptResult {
-        GetPromptResult {
+    ) -> Result<GetPromptResult, McpError> {
+        // Validate memory is not empty
+        if args.memory.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Memory cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        // Validate when is not empty
+        if args.when.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "When cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        Ok(GetPromptResult {
             description: Some("Backdated memory recording workflow".to_string()),
             messages: vec![
                 PromptMessage::new_text(
@@ -697,7 +755,7 @@ impl MicropubMcp {
                     ),
                 ),
             ],
-        }
+        })
     }
 
     /// Template for creating a categorized post
@@ -708,8 +766,24 @@ impl MicropubMcp {
     async fn categorized_post(
         &self,
         Parameters(args): Parameters<CategorizedPostPromptArgs>,
-    ) -> GetPromptResult {
-        GetPromptResult {
+    ) -> Result<GetPromptResult, McpError> {
+        // Validate topic is not empty
+        if args.topic.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Topic cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        // Validate categories is not empty
+        if args.categories.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "Categories cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        Ok(GetPromptResult {
             description: Some("Categorized post workflow".to_string()),
             messages: vec![
                 PromptMessage::new_text(
@@ -728,7 +802,7 @@ impl MicropubMcp {
                     ),
                 ),
             ],
-        }
+        })
     }
 
     /// General micropub posting workflow
