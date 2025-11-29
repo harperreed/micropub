@@ -579,8 +579,9 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<QuickNotePromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
-        // Validate topic is not empty
-        if args.topic.trim().is_empty() {
+        // Validate and normalize topic
+        let topic = args.topic.trim();
+        if topic.is_empty() {
             return Err(McpError::invalid_params(
                 "Topic cannot be empty".to_string(),
                 None,
@@ -592,13 +593,13 @@ impl MicropubMcp {
             messages: vec![
                 PromptMessage::new_text(
                     PromptMessageRole::User,
-                    format!("I want to post a quick note about: {}", args.topic),
+                    format!("I want to post a quick note about: {}", topic),
                 ),
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
                     format!(
                         "I'll help you create a quick note about {}. What would you like to say?",
-                        args.topic
+                        topic
                     ),
                 ),
             ],
@@ -614,8 +615,9 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<PhotoPostPromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
-        // Validate subject is not empty
-        if args.subject.trim().is_empty() {
+        // Validate and normalize subject
+        let subject = args.subject.trim();
+        if subject.is_empty() {
             return Err(McpError::invalid_params(
                 "Subject cannot be empty".to_string(),
                 None,
@@ -627,7 +629,7 @@ impl MicropubMcp {
             messages: vec![
                 PromptMessage::new_text(
                     PromptMessageRole::User,
-                    format!("I want to post a photo about: {}", args.subject),
+                    format!("I want to post a photo about: {}", subject),
                 ),
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
@@ -636,7 +638,7 @@ impl MicropubMcp {
                          1. The photo file path or URL\n\
                          2. A caption for the photo\n\
                          3. Any additional context or description",
-                        args.subject
+                        subject
                     ),
                 ),
             ],
@@ -652,17 +654,19 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<ArticleDraftPromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
-        // Validate topic is not empty
-        if args.topic.trim().is_empty() {
+        // Validate and normalize topic
+        let topic = args.topic.trim();
+        if topic.is_empty() {
             return Err(McpError::invalid_params(
                 "Topic cannot be empty".to_string(),
                 None,
             ));
         }
 
-        // Validate key_points if provided
-        if let Some(ref points) = args.key_points {
-            if points.trim().is_empty() {
+        // Validate and normalize key_points if provided
+        let key_points = args.key_points.as_ref().map(|p| p.trim());
+        if let Some(points) = key_points {
+            if points.is_empty() {
                 return Err(McpError::invalid_params(
                     "Key points cannot be empty if provided".to_string(),
                     None,
@@ -670,7 +674,7 @@ impl MicropubMcp {
             }
         }
 
-        let key_points_text = if let Some(ref points) = args.key_points {
+        let key_points_text = if let Some(points) = key_points {
             format!("\n\nKey points to cover:\n{}", points)
         } else {
             String::new()
@@ -683,7 +687,7 @@ impl MicropubMcp {
                     PromptMessageRole::User,
                     format!(
                         "I want to write an article about: {}{}",
-                        args.topic, key_points_text
+                        topic, key_points_text
                     ),
                 ),
                 PromptMessage::new_text(
@@ -695,8 +699,8 @@ impl MicropubMcp {
                          3. Main body sections{}\n\
                          4. A conclusion\n\n\
                          This will be saved as a draft for you to edit before publishing.",
-                        args.topic,
-                        if args.key_points.is_some() {
+                        topic,
+                        if key_points.is_some() {
                             " covering your key points"
                         } else {
                             ""
@@ -716,16 +720,18 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<BackdateMemoryPromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
-        // Validate memory is not empty
-        if args.memory.trim().is_empty() {
+        // Validate and normalize memory
+        let memory = args.memory.trim();
+        if memory.is_empty() {
             return Err(McpError::invalid_params(
                 "Memory cannot be empty".to_string(),
                 None,
             ));
         }
 
-        // Validate when is not empty
-        if args.when.trim().is_empty() {
+        // Validate and normalize when
+        let when = args.when.trim();
+        if when.is_empty() {
             return Err(McpError::invalid_params(
                 "When cannot be empty".to_string(),
                 None,
@@ -737,10 +743,7 @@ impl MicropubMcp {
             messages: vec![
                 PromptMessage::new_text(
                     PromptMessageRole::User,
-                    format!(
-                        "I want to record this memory from {}: {}",
-                        args.when, args.memory
-                    ),
+                    format!("I want to record this memory from {}: {}", when, memory),
                 ),
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
@@ -751,7 +754,7 @@ impl MicropubMcp {
                          3. Save it as a draft\n\
                          4. Publish it with the backdated timestamp\n\n\
                          Tell me more about what happened.",
-                        args.when, args.when
+                        when, when
                     ),
                 ),
             ],
@@ -767,16 +770,18 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<CategorizedPostPromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
-        // Validate topic is not empty
-        if args.topic.trim().is_empty() {
+        // Validate and normalize topic
+        let topic = args.topic.trim();
+        if topic.is_empty() {
             return Err(McpError::invalid_params(
                 "Topic cannot be empty".to_string(),
                 None,
             ));
         }
 
-        // Validate categories is not empty
-        if args.categories.trim().is_empty() {
+        // Validate and normalize categories
+        let categories = args.categories.trim();
+        if categories.is_empty() {
             return Err(McpError::invalid_params(
                 "Categories cannot be empty".to_string(),
                 None,
@@ -790,7 +795,7 @@ impl MicropubMcp {
                     PromptMessageRole::User,
                     format!(
                         "I want to post about {} in categories: {}",
-                        args.topic, args.categories
+                        topic, categories
                     ),
                 ),
                 PromptMessage::new_text(
@@ -798,7 +803,7 @@ impl MicropubMcp {
                     format!(
                         "I'll help you create a post about {} with categories: {}.\n\n\
                          What would you like to say? I'll make sure to tag it appropriately.",
-                        args.topic, args.categories
+                        topic, categories
                     ),
                 ),
             ],
