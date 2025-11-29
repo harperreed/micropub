@@ -9,12 +9,15 @@ Add Model Context Protocol (MCP) server support to enable AI assistants to post 
 - ✅ Added rmcp dependencies (v0.9.1 with transport-io feature) to Cargo.toml
 - ✅ Created MCP module structure (`src/mcp.rs`)
 - ✅ Added `micropub mcp` CLI command
-- ✅ Implemented 6 core tools:
+- ✅ Implemented 10 core tools:
   - `publish_post` - Create and publish immediately
   - `create_draft` - Save draft for later
   - `list_drafts` - View all drafts
+  - `view_draft` - Read content of a specific draft
   - `publish_backdate` - Publish with past timestamp
   - `delete_post` - Remove published post
+  - `list_posts` - View published posts with pagination
+  - `list_media` - View uploaded media files
   - `whoami` - Check authentication status
 - ✅ Full ServerHandler implementation with tool metadata
 - ✅ Basic test coverage (7 passing tests)
@@ -87,7 +90,7 @@ micropub mcp
 The server will:
 1. Start listening on stdio
 2. Wait for MCP protocol messages
-3. Expose all 6 tools to connecting clients
+3. Expose all 10 tools to connecting clients
 4. Use existing micropub authentication (no separate setup)
 
 ### Configuration
@@ -122,6 +125,15 @@ Claude: *uses list_drafts tool* "You have 3 drafts:
 - Trip to Portland (abc-123)
 - Coffee Review (def-456)
 - ...
+
+User: "Show me my recent posts"
+Claude: *uses list_posts tool* "Here are your recent posts:
+- Morning Coffee (https://example.com/2024/01/coffee)
+- Portland Trip (https://example.com/2024/01/portland)
+- ...
+
+User: "What's in draft abc-123?"
+Claude: *uses view_draft tool* "This draft is titled 'Trip to Portland' and contains...
 ```
 
 ## Testing
@@ -139,6 +151,8 @@ All 7 tests pass:
 - ✅ publish_backdate tool
 - ✅ delete_post tool
 - ✅ whoami tool
+
+Note: Tests for list_posts, list_media, and view_draft are placeholders pending MCP test framework improvements.
 
 ### Integration Testing
 
@@ -180,10 +194,10 @@ This will:
 
 ## Code Location
 
-- MCP module: `src/mcp.rs` (272 lines)
-- Parameter types: Lines 23-60
-- Tool implementations: Lines 78-237
-- ServerHandler: Lines 238-249
+- MCP module: `src/mcp.rs` (~530 lines)
+- Parameter types: Lines 23-100
+- Tool implementations: Lines 118-510
+- ServerHandler: Lines 513-525
 - CLI command: `src/main.rs:89` (Commands::Mcp)
 - Dependencies: `Cargo.toml:36-37`
 - Tests: `tests/mcp_tests.rs`

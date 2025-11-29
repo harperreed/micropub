@@ -61,6 +61,44 @@ pub struct DeletePostArgs {
     pub url: String,
 }
 
+/// Parameters for list_posts tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListPostsArgs {
+    /// Number of posts to retrieve (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Offset for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Parameters for view_draft tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ViewDraftArgs {
+    /// The draft ID to view
+    #[schemars(regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+    pub draft_id: String,
+}
+
+/// Parameters for list_media tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ListMediaArgs {
+    /// Number of media items to retrieve (default: 20)
+    #[serde(default = "default_media_limit")]
+    pub limit: usize,
+    /// Offset for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+fn default_media_limit() -> usize {
+    20
+}
+
 /// MCP server state
 #[derive(Clone)]
 pub struct MicropubMcp {
@@ -343,6 +381,129 @@ impl MicropubMcp {
                 .as_deref()
                 .unwrap_or("(not configured)")
         );
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// List published posts
+    #[tool(description = "List published micropub posts with pagination")]
+    async fn list_posts(
+        &self,
+        Parameters(args): Parameters<ListPostsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let posts = crate::operations::fetch_posts(args.limit, args.offset)
+            .await
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to fetch posts: {}", e),
+                    None,
+                )
+            })?;
+
+        if posts.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No posts found.",
+            )]));
+        }
+
+        let mut output = String::from("Posts:\n\n");
+        for post in posts {
+            let title = post.name.unwrap_or_else(|| "[untitled]".to_string());
+            output.push_str(&format!("- {} ({})\n", title, post.url));
+            output.push_str(&format!("  Published: {}\n", post.published));
+            if !post.categories.is_empty() {
+                output.push_str(&format!("  Categories: {}\n", post.categories.join(", ")));
+            }
+            if !post.content.is_empty() {
+                let preview = if post.content.len() > 100 {
+                    format!("{}...", &post.content[..100])
+                } else {
+                    post.content.clone()
+                };
+                output.push_str(&format!("  Preview: {}\n", preview));
+            }
+            output.push('\n');
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// View a specific draft
+    #[tool(description = "View the content of a specific draft")]
+    async fn view_draft(
+        &self,
+        Parameters(args): Parameters<ViewDraftArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate draft_id format to prevent path traversal
+        if args.draft_id.is_empty() {
+            return Err(McpError::invalid_params(
+                "Draft ID cannot be empty".to_string(),
+                None,
+            ));
+        }
+        if !args
+            .draft_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(McpError::invalid_params(
+                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
+                    .to_string(),
+                None,
+            ));
+        }
+
+        let draft = Draft::load(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Failed to load draft: {}", e), None))?;
+
+        let mut output = String::new();
+        output.push_str(&format!("Draft: {}\n\n", args.draft_id));
+
+        if let Some(ref title) = draft.metadata.name {
+            output.push_str(&format!("Title: {}\n", title));
+        }
+        if !draft.metadata.category.is_empty() {
+            output.push_str(&format!(
+                "Categories: {}\n",
+                draft.metadata.category.join(", ")
+            ));
+        }
+        output.push_str(&format!("\nContent:\n{}", draft.content));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// List media files
+    #[tool(description = "List uploaded media files with pagination")]
+    async fn list_media(
+        &self,
+        Parameters(args): Parameters<ListMediaArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let media_items = crate::operations::fetch_media(args.limit, args.offset)
+            .await
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to fetch media: {}", e),
+                    None,
+                )
+            })?;
+
+        if media_items.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No media files found.",
+            )]));
+        }
+
+        let mut output = String::from("Media files:\n\n");
+        for item in media_items {
+            output.push_str(&format!("- {}\n", item.url));
+            if let Some(ref name) = item.name {
+                output.push_str(&format!("  Name: {}\n", name));
+            }
+            output.push_str(&format!("  Uploaded: {}\n\n", item.uploaded));
+        }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
