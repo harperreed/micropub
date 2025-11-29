@@ -3,18 +3,24 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, Content, ErrorCode, Implementation, ProtocolVersion, ServerCapabilities,
-    ServerInfo,
+    CallToolResult, Content, ErrorCode, GetPromptRequestParam, GetPromptResult, Implementation,
+    ListPromptsResult, PaginatedRequestParam, PromptMessage, PromptMessageRole, ProtocolVersion,
+    ServerCapabilities, ServerInfo,
 };
+use rmcp::prompt;
+use rmcp::prompt_handler;
+use rmcp::prompt_router;
+use rmcp::service::RequestContext;
 use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
 use rmcp::transport::stdio;
 use rmcp::ErrorData as McpError;
-use rmcp::{schemars, ServerHandler, ServiceExt};
+use rmcp::{schemars, RoleServer, ServerHandler, ServiceExt};
 
 use crate::config::Config;
 use crate::draft::Draft;
@@ -99,10 +105,53 @@ fn default_media_limit() -> usize {
     20
 }
 
+/// Parameters for quick-note prompt
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct QuickNotePromptArgs {
+    /// The topic or subject you want to write about
+    pub topic: String,
+}
+
+/// Parameters for photo-post prompt
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PhotoPostPromptArgs {
+    /// What the photo is about or depicts
+    pub subject: String,
+}
+
+/// Parameters for article-draft prompt
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct ArticleDraftPromptArgs {
+    /// The article topic or title
+    pub topic: String,
+    /// Key points to cover (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_points: Option<String>,
+}
+
+/// Parameters for backdate-memory prompt
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct BackdateMemoryPromptArgs {
+    /// What event or memory to record
+    pub memory: String,
+    /// When it happened (e.g., "last Tuesday", "2024-01-15")
+    pub when: String,
+}
+
+/// Parameters for categorized-post prompt
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct CategorizedPostPromptArgs {
+    /// The post topic
+    pub topic: String,
+    /// Categories for the post (comma-separated)
+    pub categories: String,
+}
+
 /// MCP server state
 #[derive(Clone)]
 pub struct MicropubMcp {
     tool_router: ToolRouter<MicropubMcp>,
+    prompt_router: PromptRouter<MicropubMcp>,
 }
 
 impl MicropubMcp {
@@ -110,6 +159,7 @@ impl MicropubMcp {
     pub fn new() -> Result<Self> {
         Ok(Self {
             tool_router: Self::tool_router(),
+            prompt_router: Self::prompt_router(),
         })
     }
 }
@@ -509,13 +559,217 @@ impl MicropubMcp {
     }
 }
 
+/// Prompts for common micropub workflows
+#[prompt_router]
+impl MicropubMcp {
+    /// Template for posting a quick note or thought
+    #[prompt(
+        name = "quick-note",
+        description = "Post a quick note or thought to your micropub site"
+    )]
+    async fn quick_note(
+        &self,
+        Parameters(args): Parameters<QuickNotePromptArgs>,
+    ) -> GetPromptResult {
+        GetPromptResult {
+            description: Some("Quick note posting workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    format!("I want to post a quick note about: {}", args.topic),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    format!(
+                        "I'll help you create a quick note about {}. What would you like to say?",
+                        args.topic
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// Template for posting a photo with caption
+    #[prompt(
+        name = "photo-post",
+        description = "Create a photo post with caption for your micropub site"
+    )]
+    async fn photo_post(
+        &self,
+        Parameters(args): Parameters<PhotoPostPromptArgs>,
+    ) -> GetPromptResult {
+        GetPromptResult {
+            description: Some("Photo post workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    format!("I want to post a photo about: {}", args.subject),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    format!(
+                        "I'll help you create a photo post about {}. Please provide:\n\
+                         1. The photo file path or URL\n\
+                         2. A caption for the photo\n\
+                         3. Any additional context or description",
+                        args.subject
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// Template for creating a longer article draft
+    #[prompt(
+        name = "article-draft",
+        description = "Create a longer article draft for later editing and publishing"
+    )]
+    async fn article_draft(
+        &self,
+        Parameters(args): Parameters<ArticleDraftPromptArgs>,
+    ) -> GetPromptResult {
+        let key_points_text = if let Some(ref points) = args.key_points {
+            format!("\n\nKey points to cover:\n{}", points)
+        } else {
+            String::new()
+        };
+
+        GetPromptResult {
+            description: Some("Article draft creation workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    format!(
+                        "I want to write an article about: {}{}",
+                        args.topic, key_points_text
+                    ),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    format!(
+                        "I'll help you draft an article about {}. Let's start with:\n\
+                         1. A compelling title\n\
+                         2. An introduction that hooks the reader\n\
+                         3. Main body sections{}\n\
+                         4. A conclusion\n\n\
+                         This will be saved as a draft for you to edit before publishing.",
+                        args.topic,
+                        if args.key_points.is_some() {
+                            " covering your key points"
+                        } else {
+                            ""
+                        }
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// Template for backdating a memory or past event
+    #[prompt(
+        name = "backdate-memory",
+        description = "Record a memory or past event with its original date"
+    )]
+    async fn backdate_memory(
+        &self,
+        Parameters(args): Parameters<BackdateMemoryPromptArgs>,
+    ) -> GetPromptResult {
+        GetPromptResult {
+            description: Some("Backdated memory recording workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    format!(
+                        "I want to record this memory from {}: {}",
+                        args.when, args.memory
+                    ),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    format!(
+                        "I'll help you record this memory from {}. Let's:\n\
+                         1. Write out the full memory in detail\n\
+                         2. Convert '{}' to a specific date (ISO 8601 format)\n\
+                         3. Save it as a draft\n\
+                         4. Publish it with the backdated timestamp\n\n\
+                         Tell me more about what happened.",
+                        args.when, args.when
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// Template for creating a categorized post
+    #[prompt(
+        name = "categorized-post",
+        description = "Create a post with specific categories for organization"
+    )]
+    async fn categorized_post(
+        &self,
+        Parameters(args): Parameters<CategorizedPostPromptArgs>,
+    ) -> GetPromptResult {
+        GetPromptResult {
+            description: Some("Categorized post workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    format!(
+                        "I want to post about {} in categories: {}",
+                        args.topic, args.categories
+                    ),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    format!(
+                        "I'll help you create a post about {} with categories: {}.\n\n\
+                         What would you like to say? I'll make sure to tag it appropriately.",
+                        args.topic, args.categories
+                    ),
+                ),
+            ],
+        }
+    }
+
+    /// General micropub posting workflow
+    #[prompt(
+        name = "new-post",
+        description = "General workflow for creating a new micropub post"
+    )]
+    async fn new_post(&self) -> GetPromptResult {
+        GetPromptResult {
+            description: Some("General micropub posting workflow".to_string()),
+            messages: vec![
+                PromptMessage::new_text(
+                    PromptMessageRole::User,
+                    "I want to create a new post".to_string(),
+                ),
+                PromptMessage::new_text(
+                    PromptMessageRole::Assistant,
+                    "I'll help you create a new micropub post! What type of post would you like to make?\n\n\
+                     - Quick note or thought\n\
+                     - Photo with caption\n\
+                     - Longer article (saved as draft)\n\
+                     - Backdated memory\n\
+                     - Categorized post\n\n\
+                     Or just tell me what you want to post and I'll figure out the best format!".to_string(),
+                ),
+            ],
+        }
+    }
+}
+
 /// Implement ServerHandler to provide server metadata
 #[tool_handler]
+#[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for MicropubMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Micropub MCP server for posting and managing micropub content via AI assistants"

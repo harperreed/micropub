@@ -19,7 +19,14 @@ Add Model Context Protocol (MCP) server support to enable AI assistants to post 
   - `list_posts` - View published posts with pagination
   - `list_media` - View uploaded media files
   - `whoami` - Check authentication status
-- ✅ Full ServerHandler implementation with tool metadata
+- ✅ Implemented 6 workflow prompts:
+  - `quick-note` - Post a quick note or thought
+  - `photo-post` - Create a photo post with caption
+  - `article-draft` - Create a longer article draft
+  - `backdate-memory` - Record a memory with past date
+  - `categorized-post` - Create post with categories
+  - `new-post` - General posting workflow guide
+- ✅ Full ServerHandler implementation with tool and prompt metadata
 - ✅ Basic test coverage (7 passing tests)
 - ✅ Compilation successful with rmcp v0.9.1
 - ✅ Security hardened (input validation, path traversal protection, panic prevention)
@@ -54,11 +61,37 @@ async fn publish_post(&self, content: String, title: Option<String>) -> Result<.
 }
 ```
 
+**Prompt pattern (same Parameters<T> requirement):**
+```rust
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct QuickNotePromptArgs {
+    pub topic: String,
+}
+
+#[prompt(
+    name = "quick-note",
+    description = "Post a quick note or thought"
+)]
+async fn quick_note(&self, Parameters(args): Parameters<QuickNotePromptArgs>) -> GetPromptResult {
+    GetPromptResult {
+        description: Some("Quick note posting workflow".to_string()),
+        messages: vec![
+            PromptMessage::new_text(PromptMessageRole::User, format!("...", args.topic)),
+            PromptMessage::new_text(PromptMessageRole::Assistant, "...".to_string()),
+        ],
+    }
+}
+```
+
 **Other requirements:**
 - Tool router field must use concrete type: `ToolRouter<MicropubMcp>` not `ToolRouter<Self>`
+- Prompt router field must use concrete type: `PromptRouter<MicropubMcp>` not `PromptRouter<Self>`
 - Import from `rmcp::handler::server::router::tool::ToolRouter` (not the shorter path)
+- Import from `rmcp::handler::server::router::prompt::PromptRouter`
 - Use `Implementation::from_build_env()` for server metadata
 - Enable `transport-io` feature in Cargo.toml for stdio support
+- Enable both tools and prompts in capabilities: `.enable_tools().enable_prompts()`
+- Add `#[prompt_handler(router = self.prompt_router)]` to ServerHandler impl
 
 ### Security Features
 
@@ -136,6 +169,86 @@ User: "What's in draft abc-123?"
 Claude: *uses view_draft tool* "This draft is titled 'Trip to Portland' and contains...
 ```
 
+### Using Prompts
+
+The MCP server provides workflow prompts that guide AI assistants through common micropub posting patterns. Prompts help structure conversations and provide context-specific guidance.
+
+**Available Prompts:**
+
+1. **quick-note** - Post a quick note or thought
+   ```
+   User: [selects quick-note prompt, enters topic: "morning coffee"]
+   Claude: "I'll help you create a quick note about morning coffee. What would you like to say?"
+   ```
+
+2. **photo-post** - Create a photo post with caption
+   ```
+   User: [selects photo-post prompt, enters subject: "sunset at the beach"]
+   Claude: "I'll help you create a photo post about sunset at the beach. Please provide:
+   1. The photo file path or URL
+   2. A caption for the photo
+   3. Any additional context or description"
+   ```
+
+3. **article-draft** - Create a longer article draft
+   ```
+   User: [selects article-draft prompt, enters topic: "Rust async patterns", key_points: "tokio, async/await, error handling"]
+   Claude: "I'll help you draft an article about Rust async patterns. Let's start with:
+   1. A compelling title
+   2. An introduction that hooks the reader
+   3. Main body sections covering your key points
+   4. A conclusion
+
+   This will be saved as a draft for you to edit before publishing."
+   ```
+
+4. **backdate-memory** - Record a memory with past date
+   ```
+   User: [selects backdate-memory prompt, memory: "graduated from college", when: "May 2015"]
+   Claude: "I'll help you record this memory from May 2015. Let's:
+   1. Write out the full memory in detail
+   2. Convert 'May 2015' to a specific date (ISO 8601 format)
+   3. Save it as a draft
+   4. Publish it with the backdated timestamp
+
+   Tell me more about what happened."
+   ```
+
+5. **categorized-post** - Create post with specific categories
+   ```
+   User: [selects categorized-post prompt, topic: "new project launch", categories: "projects,announcements"]
+   Claude: "I'll help you create a post about new project launch with categories: projects, announcements.
+
+   What would you like to say? I'll make sure to tag it appropriately."
+   ```
+
+6. **new-post** - General posting workflow guide
+   ```
+   User: [selects new-post prompt]
+   Claude: "I'll help you create a new micropub post! What type of post would you like to make?
+
+   - Quick note or thought
+   - Photo with caption
+   - Longer article (saved as draft)
+   - Backdated memory
+   - Categorized post
+
+   Or just tell me what you want to post and I'll figure out the best format!"
+   ```
+
+**How Prompts Work:**
+
+- Prompts are templates that pre-fill conversation context
+- They guide the AI assistant through structured workflows
+- They can accept arguments to customize the workflow
+- They're user-initiated (typically via UI selection in Claude Desktop)
+- They provide a more natural, conversational way to use the MCP tools
+
+**In Claude Desktop:**
+
+Prompts appear as suggested workflows that users can select. When you select a prompt, Claude Desktop may ask you to fill in any required parameters (like "topic" or "subject"), then starts the conversation with the pre-filled context.
+```
+
 ## Testing
 
 ### Unit Tests
@@ -179,11 +292,11 @@ This will:
 
 - [ ] Add photo upload support to publish_post tool
 - [ ] Add resource support (expose published posts as MCP resources)
-- [ ] Add prompt support (templates for common post types)
 - [ ] Integration tests with actual MCP clients
 - [ ] Support for multiple micropub endpoints/profiles
 - [ ] Draft editing via MCP
 - [ ] Post search/filtering tools
+- [ ] More specialized prompts (book reviews, trip reports, etc.)
 
 ## Resources
 
@@ -194,10 +307,11 @@ This will:
 
 ## Code Location
 
-- MCP module: `src/mcp.rs` (~530 lines)
-- Parameter types: Lines 23-100
-- Tool implementations: Lines 118-510
-- ServerHandler: Lines 513-525
+- MCP module: `src/mcp.rs` (~760 lines)
+- Parameter types: Lines 28-146
+- Tool implementations: Lines 165-558
+- Prompt implementations: Lines 560-733
+- ServerHandler: Lines 735-753
 - CLI command: `src/main.rs:89` (Commands::Mcp)
 - Dependencies: `Cargo.toml:36-37`
 - Tests: `tests/mcp_tests.rs`
@@ -209,6 +323,15 @@ You're not using the Parameters wrapper. All tool parameters must use `Parameter
 
 ### "cannot find attribute `tool`"
 Missing import: add `use rmcp::tool;`
+
+### "cannot find attribute `prompt`"
+Missing imports: add `use rmcp::prompt;`, `use rmcp::prompt_router;`, and `use rmcp::prompt_handler;`
+
+### Prompts not showing in Claude Desktop
+1. Check server capabilities include `.enable_prompts()`
+2. Verify prompt_router is added to the struct and initialized
+3. Check `#[prompt_handler(router = self.prompt_router)]` is on ServerHandler impl
+4. Restart Claude Desktop after config changes
 
 ### "module `mcp` is private"
 Module not enabled in lib.rs. Add `pub mod mcp;`
