@@ -1,6 +1,5 @@
 use micropub::config::Config;
 use micropub::draft::{generate_draft_id, Draft};
-use std::env;
 
 #[test]
 #[ignore] // DISABLED: Test writes to production data directory - needs refactoring to use temp dirs
