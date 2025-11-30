@@ -1,0 +1,208 @@
+name: Update Homebrew Tap
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-bottles:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13  # Intel Mac
+            arch: x86_64
+            bottle_tag: ventura
+          - os: macos-14  # Apple Silicon
+            arch: arm64
+            bottle_tag: arm64_sonoma
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Create bottle
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"  # Remove 'v' prefix
+          BOTTLE_NAME="micropub-${VERSION}.${{ matrix.bottle_tag }}.bottle.tar.gz"
+
+          cd target/release
+          tar czf "../../${BOTTLE_NAME}" micropub
+          cd ../..
+
+          # Calculate SHA256
+          SHA256=$(shasum -a 256 "${BOTTLE_NAME}" | awk '{print $1}')
+          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "bottle_name=${BOTTLE_NAME}" >> $GITHUB_OUTPUT
+        id: bottle
+
+      - name: Upload bottle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bottle-${{ matrix.arch }}
+          path: ${{ steps.bottle.outputs.bottle_name }}
+
+      - name: Save bottle info
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.bottle_tag }}:${{ steps.bottle.outputs.sha256 }}" > bottle-${{ matrix.arch }}.txt
+
+      - name: Upload bottle info
+        uses: actions/upload-artifact@v4
+        with:
+          name: bottle-info-${{ matrix.arch }}
+          path: bottle-${{ matrix.arch }}.txt
+
+  update-formula:
+    needs: build-bottles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download source tarball with retry
+        id: source
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          URL="https://github.com/harperreed/micropub/archive/refs/tags/v${VERSION}.tar.gz"
+
+          # Wait for GitHub to generate the archive (race condition mitigation)
+          for i in {1..6}; do
+            if curl -fL -o source.tar.gz "${URL}"; then
+              SHA256=$(shasum -a 256 source.tar.gz | awk '{print $1}')
+              [[ -n "$SHA256" ]] || { echo "ERROR: Failed to calculate SHA256"; exit 1; }
+              echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 10s for GitHub to generate archive..."
+            sleep 10
+          done
+          echo "ERROR: Failed to download source tarball after 60s"
+          exit 1
+
+      - name: Download bottle info
+        uses: actions/download-artifact@v4
+        with:
+          path: bottle-info
+
+      - name: Read and validate bottle SHA256s
+        id: bottles
+        run: |
+          set -euo pipefail
+
+          X86_64_INFO=$(cat bottle-info/bottle-info-x86_64/bottle-x86_64.txt)
+          ARM64_INFO=$(cat bottle-info/bottle-info-arm64/bottle-arm64.txt)
+
+          X86_64_TAG=$(echo "$X86_64_INFO" | cut -d':' -f1)
+          X86_64_SHA=$(echo "$X86_64_INFO" | cut -d':' -f2)
+          ARM64_TAG=$(echo "$ARM64_INFO" | cut -d':' -f1)
+          ARM64_SHA=$(echo "$ARM64_INFO" | cut -d':' -f2)
+
+          # Validate SHA256 format (64 hex characters)
+          if ! [[ "$X86_64_SHA" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "ERROR: Invalid x86_64 SHA256: $X86_64_SHA"
+            exit 1
+          fi
+          if ! [[ "$ARM64_SHA" =~ ^[a-f0-9]{64}$ ]]; then
+            echo "ERROR: Invalid ARM64 SHA256: $ARM64_SHA"
+            exit 1
+          fi
+
+          echo "x86_64_tag=${X86_64_TAG}" >> $GITHUB_OUTPUT
+          echo "x86_64_sha=${X86_64_SHA}" >> $GITHUB_OUTPUT
+          echo "arm64_tag=${ARM64_TAG}" >> $GITHUB_OUTPUT
+          echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Generate formula
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          SOURCE_SHA="${{ steps.source.outputs.sha256 }}"
+          X86_64_TAG="${{ steps.bottles.outputs.x86_64_tag }}"
+          X86_64_SHA="${{ steps.bottles.outputs.x86_64_sha }}"
+          ARM64_TAG="${{ steps.bottles.outputs.arm64_tag }}"
+          ARM64_SHA="${{ steps.bottles.outputs.arm64_sha }}"
+
+          cat > micropub.rb << EOF
+          class Micropub < Formula
+            desc "Ultra-compliant Micropub CLI with MCP server support"
+            homepage "https://github.com/harperreed/micropub"
+            url "https://github.com/harperreed/micropub/archive/refs/tags/v${VERSION}.tar.gz"
+            sha256 "${SOURCE_SHA}"
+            license "MIT"
+
+            depends_on "rust" => :build
+
+            bottle do
+              root_url "https://github.com/harperreed/micropub/releases/download/v${VERSION}"
+              sha256 cellar: :any_skip_relocation, ${ARM64_TAG}: "${ARM64_SHA}"
+              sha256 cellar: :any_skip_relocation, ${X86_64_TAG}: "${X86_64_SHA}"
+            end
+
+            def install
+              system "cargo", "install", *std_cargo_args
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/micropub --version")
+            end
+          end
+          EOF
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: harperreed/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula in tap
+        run: |
+          set -euo pipefail
+          mkdir -p homebrew-tap/Formula
+          cp micropub.rb homebrew-tap/Formula/micropub.rb
+
+      - name: Commit and push formula
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/micropub.rb
+          git diff-index --quiet HEAD || git commit -m "Update micropub to ${{ steps.version.outputs.version }}"
+          if ! git push; then
+            echo "ERROR: Failed to push formula update to homebrew-tap"
+            echo "This may be due to a concurrent update or network issue"
+            git pull --rebase
+            git push || exit 1
+          fi
+
+      - name: Download bottle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bottles
+
+      - name: Upload bottles to release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          files: |
+            bottles/bottle-x86_64/*.tar.gz
+            bottles/bottle-arm64/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

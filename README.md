@@ -15,6 +15,15 @@ An ultra-compliant Micropub CLI for interacting with Micropub-enabled sites like
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+brew tap harperreed/tap
+brew install micropub
+```
+
+### From Source
+
 ```bash
 cargo install --path .
 ```
