@@ -21,7 +21,7 @@ async fn test_whoami_returns_profile_info() {
 
     // Note: This will be updated once we can actually call the tool
     // For now, just verify server exists
-    assert!(true, "Placeholder for whoami tool test");
+    // TODO: Implement actual whoami tool test
 }
 
 #[tokio::test]
@@ -29,8 +29,7 @@ async fn test_create_draft_tool() {
     // RED: Test creating a draft via MCP
     let _server = MicropubMcp::new().expect("Server should initialize");
 
-    // Placeholder - will implement once we can call tools
-    assert!(true, "Placeholder for create_draft tool test");
+    // TODO: Implement actual create_draft tool test
 }
 
 #[tokio::test]
@@ -38,8 +37,7 @@ async fn test_list_drafts_tool() {
     // RED: Test listing drafts via MCP
     let _server = MicropubMcp::new().expect("Server should initialize");
 
-    // Placeholder - will implement once we can call tools
-    assert!(true, "Placeholder for list_drafts tool test");
+    // TODO: Implement actual list_drafts tool test
 }
 
 #[tokio::test]
@@ -47,8 +45,7 @@ async fn test_publish_post_tool() {
     // RED: Test publishing via MCP
     let _server = MicropubMcp::new().expect("Server should initialize");
 
-    // Placeholder - will implement once we can call tools
-    assert!(true, "Placeholder for publish_post tool test");
+    // TODO: Implement actual publish_post tool test
 }
 
 #[tokio::test]
@@ -56,8 +53,7 @@ async fn test_publish_backdate_tool_with_valid_date() {
     // RED: Test backdating with valid ISO 8601 date
     let _server = MicropubMcp::new().expect("Server should initialize");
 
-    // Placeholder - will implement once we can call tools
-    assert!(true, "Placeholder for publish_backdate tool test");
+    // TODO: Implement actual publish_backdate tool test
 }
 
 #[tokio::test]
@@ -65,6 +61,5 @@ async fn test_delete_post_tool() {
     // RED: Test deleting a post via MCP
     let _server = MicropubMcp::new().expect("Server should initialize");
 
-    // Placeholder - will implement once we can call tools
-    assert!(true, "Placeholder for delete_post tool test");
+    // TODO: Implement actual delete_post tool test
 }

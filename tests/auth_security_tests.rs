@@ -260,74 +260,59 @@ fn test_timeout_duration_is_reasonable() {
 // Fix 5: Scope validation
 // ============================================================================
 
+fn validate_scope(scope: &str) -> bool {
+    scope.is_empty()
+        || scope
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_')
+}
+
 #[test]
 fn test_validate_scope_allows_empty() {
     let scope = "";
-    // Simulate validate_scope logic
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(is_valid, "Empty scope should be valid");
 }
 
 #[test]
 fn test_validate_scope_allows_simple_word() {
     let scope = "create";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(is_valid, "Simple word scope should be valid");
 }
 
 #[test]
 fn test_validate_scope_allows_multiple_words() {
     let scope = "create update delete media";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(is_valid, "Multiple word scope should be valid");
 }
 
 #[test]
 fn test_validate_scope_allows_hyphens() {
     let scope = "create-post update-post";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(is_valid, "Scope with hyphens should be valid");
 }
 
 #[test]
 fn test_validate_scope_allows_underscores() {
     let scope = "create_post update_post";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(is_valid, "Scope with underscores should be valid");
 }
 
 #[test]
 fn test_validate_scope_rejects_newlines() {
     let scope = "create\ndelete";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(!is_valid, "Scope with newlines should be invalid");
 }
 
 #[test]
 fn test_validate_scope_rejects_ampersands() {
     let scope = "create&delete";
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(!is_valid, "Scope with ampersands should be invalid");
 }
 
@@ -351,10 +336,7 @@ fn test_validate_scope_rejects_special_chars() {
     ];
 
     for scope in invalid_scopes {
-        let is_valid = scope.is_empty()
-            || scope
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+        let is_valid = validate_scope(scope);
         assert!(
             !is_valid,
             "Scope '{}' with special characters should be invalid",
@@ -366,10 +348,7 @@ fn test_validate_scope_rejects_special_chars() {
 #[test]
 fn test_validate_scope_rejects_unicode() {
     let scope = "create 删除"; // Contains Chinese characters
-    let is_valid = scope.is_empty()
-        || scope
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == ' ' || c == '-' || c == '_');
+    let is_valid = validate_scope(scope);
     assert!(
         !is_valid,
         "Scope with non-ASCII characters should be invalid"
@@ -635,7 +614,7 @@ async fn test_media_endpoint_discovery() {
 fn test_security_fixes_are_documented() {
     // This test serves as documentation of what was fixed
 
-    let fixes = vec![
+    let fixes = [
         "Fix 1: Profile names preserve port numbers to prevent collisions",
         "Fix 2: OS random port fallback when preferred ports occupied",
         "Fix 3: HTTP allowed for localhost/127.0.0.1 development",

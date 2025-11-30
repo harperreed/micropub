@@ -1,6 +1,8 @@
 // ABOUTME: Minimal MCP server test to verify rmcp macro works
 // ABOUTME: Used for debugging compilation issues
 
+#![allow(dead_code)]
+
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     model::{CallToolResult, Content},

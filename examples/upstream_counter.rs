@@ -5,9 +5,7 @@
 use std::sync::Arc;
 
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::*,
-    tool, tool_router, ErrorData as McpError,
+    handler::server::router::tool::ToolRouter, model::*, tool, tool_router, ErrorData as McpError,
 };
 use tokio::sync::Mutex;
 
@@ -20,10 +18,7 @@ pub struct Counter {
 #[tool_router]
 impl Counter {
     pub fn new() -> Self {
-        Self {
-            counter: Arc::new(Mutex::new(0)),
-            tool_router: Self::tool_router(),
-        }
+        Self::default()
     }
 
     #[tool(description = "Increment the counter by 1")]
@@ -47,4 +42,13 @@ impl Counter {
 fn main() {
     let _counter = Counter::new();
     println!("Counter created successfully");
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Self {
+            counter: Arc::new(Mutex::new(0)),
+            tool_router: Self::tool_router(),
+        }
+    }
 }
