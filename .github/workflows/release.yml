@@ -30,8 +30,50 @@ jobs:
         run: |
           git diff HEAD^ HEAD -- Cargo.toml | grep -q '^[+-]version = ' && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
 
-  release:
+  build-binaries:
     needs: check-version
+    if: needs.check-version.outputs.version_changed == 'true'
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: micropub-x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: micropub-aarch64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: micropub-x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.name }}.tar.gz micropub
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.tar.gz
+
+  release:
+    needs: [check-version, build-binaries]
     if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -44,19 +86,28 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Build
-        run: cargo build --release
-
       - name: Run tests
         run: cargo test
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Display artifact structure
+        run: ls -R artifacts/
 
       - name: Create tag
         run: |
           VERSION=${{ needs.check-version.outputs.version }}
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git tag -a "v$VERSION" -m "Release v$VERSION"
-          git push origin "v$VERSION"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists, skipping tag creation"
+          else
+            git tag -a "v$VERSION" -m "Release v$VERSION"
+            git push origin "v$VERSION"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -66,6 +117,10 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          files: |
+            artifacts/micropub-x86_64-apple-darwin/micropub-x86_64-apple-darwin.tar.gz
+            artifacts/micropub-aarch64-apple-darwin/micropub-aarch64-apple-darwin.tar.gz
+            artifacts/micropub-x86_64-unknown-linux-gnu/micropub-x86_64-unknown-linux-gnu.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
