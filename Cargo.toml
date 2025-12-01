@@ -1,6 +1,6 @@
 [package]
 name = "micropub"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Harper <harper@nata2.org>"]
 description = "Ultra-compliant Micropub CLI for creating, updating, and managing IndieWeb posts"
