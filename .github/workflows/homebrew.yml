@@ -45,9 +45,11 @@ jobs:
           fi
           BOTTLE_NAME="micropub-${VERSION}.${{ matrix.bottle_tag }}.bottle.tar.gz"
 
-          cd target/release
-          tar czf "../../${BOTTLE_NAME}" micropub
-          cd ../..
+          # Create proper Homebrew directory structure
+          mkdir -p "micropub/${VERSION}/bin"
+          cp target/release/micropub "micropub/${VERSION}/bin/"
+          tar czf "${BOTTLE_NAME}" -C . "micropub/${VERSION}"
+          rm -rf micropub
 
           # Calculate SHA256
           SHA256=$(shasum -a 256 "${BOTTLE_NAME}" | awk '{print $1}')
