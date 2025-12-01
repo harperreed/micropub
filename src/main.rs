@@ -130,22 +130,33 @@ async fn main() -> Result<()> {
     if cli.command.is_none() {
         let config = micropub::config::Config::load()?;
 
-        println!("Welcome to Micropub CLI!\n");
+        println!(
+            r#"
+  ███╗   ███╗██╗ ██████╗██████╗  ██████╗ ██████╗ ██╗   ██╗██████╗
+  ████╗ ████║██║██╔════╝██╔══██╗██╔═══██╗██╔══██╗██║   ██║██╔══██╗
+  ██╔████╔██║██║██║     ██████╔╝██║   ██║██████╔╝██║   ██║██████╔╝
+  ██║╚██╔╝██║██║██║     ██╔══██╗██║   ██║██╔═══╝ ██║   ██║██╔══██╗
+  ██║ ╚═╝ ██║██║╚██████╗██║  ██║╚██████╔╝██║     ╚██████╔╝██████╔╝
+  ╚═╝     ╚═╝╚═╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝      ╚═════╝ ╚═════╝
+
+              Ultra-compliant Micropub CLI for IndieWeb
+"#
+        );
 
         if !config.default_profile.is_empty() {
-            println!("You are authenticated as: {}", config.default_profile);
-            println!("\nQuick commands:");
-            println!("  micropub tui              Launch interactive TUI");
-            println!("  micropub draft new        Create a new draft");
-            println!("  micropub posts            List published posts");
-            println!("  micropub whoami           Show current profile");
+            println!("  🔐 Authenticated as: {}", config.default_profile);
+            println!("\n  Quick commands:");
+            println!("    micropub tui              Launch interactive TUI");
+            println!("    micropub draft new        Create a new draft");
+            println!("    micropub posts            List published posts");
+            println!("    micropub whoami           Show current profile");
         } else {
-            println!("To get started, authenticate with your site:");
-            println!("  micropub auth <your-domain.com>");
+            println!("  To get started, authenticate with your site:");
+            println!("    micropub auth <your-domain.com>");
         }
 
-        println!("\nFor more help, run:");
-        println!("  micropub --help");
+        println!("\n  For more help, run:");
+        println!("    micropub --help\n");
         return Ok(());
     }
 
