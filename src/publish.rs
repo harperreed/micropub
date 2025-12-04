@@ -10,7 +10,10 @@ use crate::config::{load_token, Config};
 use crate::draft::Draft;
 use crate::media::{find_media_references, replace_paths, resolve_path, upload_file};
 
-pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> Result<()> {
+pub async fn cmd_publish(
+    draft_path: &str,
+    backdate: Option<DateTime<Utc>>,
+) -> Result<Vec<(String, String)>> {
     // Extract draft ID from path
     let draft_id = std::path::Path::new(draft_path)
         .file_stem()
@@ -51,6 +54,7 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
 
     let mut replacements = Vec::new();
     let mut uploaded_photo_urls = Vec::new();
+    let mut upload_results = Vec::new();
 
     if !media_refs.is_empty() {
         let media_endpoint = profile.media_endpoint.as_ref()
@@ -68,6 +72,13 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
             let url = upload_file(media_endpoint, &token, &resolved).await?;
             println!("    -> {}", url);
 
+            let filename = resolved
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            upload_results.push((filename, url.clone()));
             replacements.push((local_path.clone(), url.clone()));
 
             // If this was from photo metadata, save the URL
@@ -182,5 +193,5 @@ pub async fn cmd_publish(draft_path: &str, backdate: Option<DateTime<Utc>>) -> R
     }
     println!("  Draft archived to: {}", archive_path.display());
 
-    Ok(())
+    Ok(upload_results)
 }

@@ -236,7 +236,7 @@ impl MicropubMcp {
             )
         })?;
 
-        publish::cmd_publish(draft_path_str, None)
+        let _uploads = publish::cmd_publish(draft_path_str, None)
             .await
             .map_err(|e| {
                 McpError::new(
@@ -379,7 +379,7 @@ impl MicropubMcp {
             )
         })?;
 
-        publish::cmd_publish(draft_path_str, Some(parsed_date))
+        let _uploads = publish::cmd_publish(draft_path_str, Some(parsed_date))
             .await
             .map_err(|e| {
                 McpError::new(
