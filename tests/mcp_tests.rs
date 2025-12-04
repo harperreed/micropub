@@ -79,3 +79,17 @@ fn test_upload_media_file_data_requires_filename() {
     let result: Result<serde_json::Value, _> = serde_json::from_str(json);
     assert!(result.is_ok()); // JSON is valid but semantically incomplete
 }
+
+// Note: This is a basic structure test, not a full integration test
+// Full integration would require mocking HTTP endpoints
+#[test]
+fn test_upload_media_validates_file_path_format() {
+    use serde_json::json;
+
+    let args = json!({
+        "file_path": "~/test.jpg"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+}

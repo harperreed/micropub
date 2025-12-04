@@ -620,9 +620,98 @@ impl MicropubMcp {
             ));
         }
 
-        // TODO: Implement upload logic
+        // Get config and profile
+        let config = Config::load().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load config: {}", e),
+                None,
+            )
+        })?;
+
+        let profile_name = &config.default_profile;
+        if profile_name.is_empty() {
+            return Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
+                None,
+            ));
+        }
+
+        let profile = config.get_profile(profile_name).ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Profile not found".to_string(),
+                None,
+            )
+        })?;
+
+        let media_endpoint = profile.media_endpoint.as_ref().ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No media endpoint configured. Server may not support media uploads.".to_string(),
+                None,
+            )
+        })?;
+
+        let token = crate::config::load_token(profile_name).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load token: {}", e),
+                None,
+            )
+        })?;
+
+        // Handle file_path upload
+        let (url, filename_str, mime_type) = if let Some(file_path) = args.file_path {
+            let resolved_path = crate::media::resolve_path(&file_path, None)
+                .map_err(|e| McpError::invalid_params(format!("Invalid file path: {}", e), None))?;
+
+            let filename = resolved_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| McpError::invalid_params("Invalid filename".to_string(), None))?
+                .to_string();
+
+            let mime = mime_guess::from_path(&resolved_path).first_or_octet_stream();
+
+            let url = crate::media::upload_file(media_endpoint, &token, &resolved_path)
+                .await
+                .map_err(|e| {
+                    McpError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Upload failed: {}", e),
+                        None,
+                    )
+                })?;
+
+            (url, filename, mime.to_string())
+        } else {
+            // Base64 upload - to be implemented in next task
+            return Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Base64 upload not yet implemented".to_string(),
+                None,
+            ));
+        };
+
+        // Build response
+        let alt_text = args.alt_text.unwrap_or_default();
+        let markdown = if alt_text.is_empty() {
+            format!("![]({})", url)
+        } else {
+            format!("![{}]({})", alt_text, url)
+        };
+
+        let response = serde_json::json!({
+            "url": url,
+            "filename": filename_str,
+            "mime_type": mime_type,
+            "markdown": markdown
+        });
+
         Ok(CallToolResult::success(vec![Content::text(
-            "Upload not yet implemented",
+            serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
         )]))
     }
 }
