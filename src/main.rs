@@ -192,7 +192,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Publish { draft } => {
-            micropub::publish::cmd_publish(&draft, None).await?;
+            let _ = micropub::publish::cmd_publish(&draft, None).await?;
             Ok(())
         }
         Commands::Backdate { draft, date } => {
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
             let parsed_date = DateTime::parse_from_rfc3339(&date)
                 .context("Invalid date format. Use ISO 8601 (e.g., 2024-01-15T10:30:00Z)")?
                 .with_timezone(&chrono::Utc);
-            micropub::publish::cmd_publish(&draft, Some(parsed_date)).await?;
+            let _ = micropub::publish::cmd_publish(&draft, Some(parsed_date)).await?;
             Ok(())
         }
         Commands::Update { url } => {

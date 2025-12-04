@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- MCP `upload_media` tool for explicit image uploads
+  - Supports file path and base64 data upload
+  - Returns structured JSON with URL, filename, mime_type, and markdown
+  - Optional alt text for accessibility
+- Enhanced `publish_post` and `publish_backdate` with upload feedback
+  - Shows which files were uploaded and their URLs
+  - Auto-detects and uploads local image references
+- Updated server instructions for upload feature discoverability
+- Enhanced photo-post prompt with upload method guidance
+
+### Changed
+- `cmd_publish` now returns upload details (filename, URL pairs)
+- Tool descriptions updated to mention automatic image upload
+
 ## [0.2.0] - 2025-01-28
 
 ### Added

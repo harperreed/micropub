@@ -2,6 +2,7 @@
 // ABOUTME: Provides tools for AI assistants to post and manage micropub content
 
 use anyhow::Result;
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -97,6 +98,26 @@ pub struct ListMediaArgs {
     pub offset: usize,
 }
 
+/// Parameters for upload_media tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UploadMediaArgs {
+    /// Path to local file (e.g., ~/Pictures/photo.jpg)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+
+    /// Base64-encoded file data (alternative to file_path)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_data: Option<String>,
+
+    /// Filename (required when using file_data)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+
+    /// Optional alt text for accessibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+}
+
 fn default_limit() -> usize {
     10
 }
@@ -175,7 +196,9 @@ impl MicropubMcp {
 #[tool_router]
 impl MicropubMcp {
     /// Create and publish a post immediately
-    #[tool(description = "Create and publish a micropub post with optional title and categories")]
+    #[tool(
+        description = "Create and publish a micropub post with optional title and categories. Automatically detects and uploads local image files (e.g., ![alt](~/photo.jpg) or <img src='/path/image.png'>) and replaces them with permanent URLs before publishing."
+    )]
     async fn publish_post(
         &self,
         Parameters(args): Parameters<PublishPostArgs>,
@@ -215,7 +238,7 @@ impl MicropubMcp {
             )
         })?;
 
-        publish::cmd_publish(draft_path_str, None)
+        let uploads = publish::cmd_publish(draft_path_str, None)
             .await
             .map_err(|e| {
                 McpError::new(
@@ -225,9 +248,16 @@ impl MicropubMcp {
                 )
             })?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            "Post published successfully!",
-        )]))
+        let mut message = String::from("Post published successfully!");
+
+        if !uploads.is_empty() {
+            message.push_str("\n\nUploaded media:");
+            for (filename, url) in uploads {
+                message.push_str(&format!("\n- {} -> {}", filename, url));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(message)]))
     }
 
     /// Create a draft post without publishing
@@ -358,7 +388,7 @@ impl MicropubMcp {
             )
         })?;
 
-        publish::cmd_publish(draft_path_str, Some(parsed_date))
+        let uploads = publish::cmd_publish(draft_path_str, Some(parsed_date))
             .await
             .map_err(|e| {
                 McpError::new(
@@ -368,10 +398,16 @@ impl MicropubMcp {
                 )
             })?;
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Post published with backdated timestamp: {}",
-            args.date
-        ))]))
+        let mut message = format!("Post published with backdated timestamp: {}", args.date);
+
+        if !uploads.is_empty() {
+            message.push_str("\n\nUploaded media:");
+            for (filename, url) in uploads {
+                message.push_str(&format!("\n- {} -> {}", filename, url));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(message)]))
     }
 
     /// Delete a published post
@@ -565,6 +601,168 @@ impl MicropubMcp {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    /// Upload a media file to the micropub media endpoint
+    #[tool(
+        description = "Upload an image or media file to your micropub site. Supports local file paths (e.g., ~/Pictures/photo.jpg) or base64-encoded data. Returns URL and markdown snippet for use in posts."
+    )]
+    async fn upload_media(
+        &self,
+        Parameters(args): Parameters<UploadMediaArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate: must have file_path OR (file_data + filename)
+        let has_path = args.file_path.is_some();
+        let has_data = args.file_data.is_some();
+        let has_filename = args.filename.is_some();
+
+        if !has_path && !has_data {
+            return Err(McpError::invalid_params(
+                "Must provide either file_path OR file_data".to_string(),
+                None,
+            ));
+        }
+
+        if has_path && has_data {
+            return Err(McpError::invalid_params(
+                "Cannot provide both file_path and file_data".to_string(),
+                None,
+            ));
+        }
+
+        if has_data && !has_filename {
+            return Err(McpError::invalid_params(
+                "filename is required when using file_data".to_string(),
+                None,
+            ));
+        }
+
+        // Get config and profile
+        let config = Config::load().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load config: {}", e),
+                None,
+            )
+        })?;
+
+        let profile_name = &config.default_profile;
+        if profile_name.is_empty() {
+            return Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
+                None,
+            ));
+        }
+
+        let profile = config.get_profile(profile_name).ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Profile not found".to_string(),
+                None,
+            )
+        })?;
+
+        let media_endpoint = profile.media_endpoint.as_ref().ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No media endpoint configured. Server may not support media uploads.".to_string(),
+                None,
+            )
+        })?;
+
+        let token = crate::config::load_token(profile_name).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load token: {}", e),
+                None,
+            )
+        })?;
+
+        // Handle file_path upload
+        let (url, filename_str, mime_type) = if let Some(file_path) = args.file_path {
+            let resolved_path = crate::media::resolve_path(&file_path, None)
+                .map_err(|e| McpError::invalid_params(format!("Invalid file path: {}", e), None))?;
+
+            let filename = resolved_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| McpError::invalid_params("Invalid filename".to_string(), None))?
+                .to_string();
+
+            let mime = mime_guess::from_path(&resolved_path).first_or_octet_stream();
+
+            let url = crate::media::upload_file(media_endpoint, &token, &resolved_path)
+                .await
+                .map_err(|e| {
+                    McpError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Upload failed: {}", e),
+                        None,
+                    )
+                })?;
+
+            (url, filename, mime.to_string())
+        } else if let Some(file_data) = args.file_data {
+            let filename = args.filename.unwrap(); // Already validated above
+
+            // Decode base64
+            let decoded = general_purpose::STANDARD.decode(&file_data).map_err(|e| {
+                McpError::invalid_params(format!("Invalid base64 data: {}", e), None)
+            })?;
+
+            // Write to temp file
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(&filename);
+
+            std::fs::write(&temp_path, decoded).map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to write temp file: {}", e),
+                    None,
+                )
+            })?;
+
+            let mime = mime_guess::from_path(&temp_path).first_or_octet_stream();
+
+            let url = crate::media::upload_file(media_endpoint, &token, &temp_path)
+                .await
+                .map_err(|e| {
+                    // Clean up temp file
+                    let _ = std::fs::remove_file(&temp_path);
+                    McpError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Upload failed: {}", e),
+                        None,
+                    )
+                })?;
+
+            // Clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+
+            (url, filename, mime.to_string())
+        } else {
+            unreachable!("Validation ensures file_path or file_data is present");
+        };
+
+        // Build response
+        let alt_text = args.alt_text.unwrap_or_default();
+        let markdown = if alt_text.is_empty() {
+            format!("![]({})", url)
+        } else {
+            format!("![{}]({})", alt_text, url)
+        };
+
+        let response = serde_json::json!({
+            "url": url,
+            "filename": filename_str,
+            "mime_type": mime_type,
+            "markdown": markdown
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
+        )]))
+    }
 }
 
 /// Prompts for common micropub workflows
@@ -634,10 +832,10 @@ impl MicropubMcp {
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
                     format!(
-                        "I'll help you create a photo post about {}. Please provide:\n\
-                         1. The photo file path or URL\n\
-                         2. A caption for the photo\n\
-                         3. Any additional context or description",
+                        "I'll help you create a photo post about {}. You can:\n\
+                         1. Upload the image first with 'upload_media' tool, then use the URL\n\
+                         2. Reference a local file (e.g., ~/Pictures/photo.jpg) and I'll auto-upload when publishing\n\n\
+                         Please provide the photo path and a caption.",
                         subject
                     ),
                 ),
@@ -851,7 +1049,11 @@ impl ServerHandler for MicropubMcp {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Micropub MCP server for posting and managing micropub content via AI assistants"
+                "Micropub MCP server for posting and managing micropub content via AI assistants.\n\n\
+                 IMAGE UPLOADS:\n\
+                 - Use 'upload_media' tool to upload images explicitly (supports file paths or base64 data)\n\
+                 - Or use 'publish_post' with local image paths (e.g., ![alt](~/photo.jpg)) - they'll auto-upload\n\n\
+                 All uploads require authentication via 'micropub auth <domain>' first."
                     .to_string(),
             ),
         }

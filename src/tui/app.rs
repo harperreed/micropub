@@ -408,7 +408,7 @@ impl App {
                 let draft_path_str = draft_path.to_string_lossy().to_string();
 
                 match crate::publish::cmd_publish(&draft_path_str, None).await {
-                    Ok(_) => {
+                    Ok(_uploads) => {
                         self.status_message = Some("Draft published successfully!".to_string());
                         self.load_drafts()?;
                         if self.selected_draft >= self.drafts.len() && self.selected_draft > 0 {
@@ -435,7 +435,7 @@ impl App {
                         match crate::publish::cmd_publish(&draft_path_str, Some(parsed_date_utc))
                             .await
                         {
-                            Ok(_) => {
+                            Ok(_uploads) => {
                                 self.status_message =
                                     Some("Draft published with backdate successfully!".to_string());
                                 self.load_drafts()?;
