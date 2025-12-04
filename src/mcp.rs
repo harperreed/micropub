@@ -196,7 +196,9 @@ impl MicropubMcp {
 #[tool_router]
 impl MicropubMcp {
     /// Create and publish a post immediately
-    #[tool(description = "Create and publish a micropub post with optional title and categories")]
+    #[tool(
+        description = "Create and publish a micropub post with optional title and categories. Automatically detects and uploads local image files (e.g., ![alt](~/photo.jpg) or <img src='/path/image.png'>) and replaces them with permanent URLs before publishing."
+    )]
     async fn publish_post(
         &self,
         Parameters(args): Parameters<PublishPostArgs>,
@@ -236,7 +238,7 @@ impl MicropubMcp {
             )
         })?;
 
-        let _uploads = publish::cmd_publish(draft_path_str, None)
+        let uploads = publish::cmd_publish(draft_path_str, None)
             .await
             .map_err(|e| {
                 McpError::new(
@@ -246,9 +248,16 @@ impl MicropubMcp {
                 )
             })?;
 
-        Ok(CallToolResult::success(vec![Content::text(
-            "Post published successfully!",
-        )]))
+        let mut message = String::from("Post published successfully!");
+
+        if !uploads.is_empty() {
+            message.push_str("\n\nUploaded media:");
+            for (filename, url) in uploads {
+                message.push_str(&format!("\n- {} -> {}", filename, url));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(message)]))
     }
 
     /// Create a draft post without publishing
@@ -379,7 +388,7 @@ impl MicropubMcp {
             )
         })?;
 
-        let _uploads = publish::cmd_publish(draft_path_str, Some(parsed_date))
+        let uploads = publish::cmd_publish(draft_path_str, Some(parsed_date))
             .await
             .map_err(|e| {
                 McpError::new(
@@ -389,10 +398,16 @@ impl MicropubMcp {
                 )
             })?;
 
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Post published with backdated timestamp: {}",
-            args.date
-        ))]))
+        let mut message = format!("Post published with backdated timestamp: {}", args.date);
+
+        if !uploads.is_empty() {
+            message.push_str("\n\nUploaded media:");
+            for (filename, url) in uploads {
+                message.push_str(&format!("\n- {} -> {}", filename, url));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(message)]))
     }
 
     /// Delete a published post
