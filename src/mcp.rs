@@ -2,6 +2,7 @@
 // ABOUTME: Provides tools for AI assistants to post and manage micropub content
 
 use anyhow::Result;
+use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Utc};
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -686,13 +687,46 @@ impl MicropubMcp {
                 })?;
 
             (url, filename, mime.to_string())
+        } else if let Some(file_data) = args.file_data {
+            let filename = args.filename.unwrap(); // Already validated above
+
+            // Decode base64
+            let decoded = general_purpose::STANDARD.decode(&file_data).map_err(|e| {
+                McpError::invalid_params(format!("Invalid base64 data: {}", e), None)
+            })?;
+
+            // Write to temp file
+            let temp_dir = std::env::temp_dir();
+            let temp_path = temp_dir.join(&filename);
+
+            std::fs::write(&temp_path, decoded).map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to write temp file: {}", e),
+                    None,
+                )
+            })?;
+
+            let mime = mime_guess::from_path(&temp_path).first_or_octet_stream();
+
+            let url = crate::media::upload_file(media_endpoint, &token, &temp_path)
+                .await
+                .map_err(|e| {
+                    // Clean up temp file
+                    let _ = std::fs::remove_file(&temp_path);
+                    McpError::new(
+                        ErrorCode::INTERNAL_ERROR,
+                        format!("Upload failed: {}", e),
+                        None,
+                    )
+                })?;
+
+            // Clean up temp file
+            let _ = std::fs::remove_file(&temp_path);
+
+            (url, filename, mime.to_string())
         } else {
-            // Base64 upload - to be implemented in next task
-            return Err(McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                "Base64 upload not yet implemented".to_string(),
-                None,
-            ));
+            unreachable!("Validation ensures file_path or file_data is present");
         };
 
         // Build response

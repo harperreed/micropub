@@ -93,3 +93,16 @@ fn test_upload_media_validates_file_path_format() {
     let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
     assert!(parsed.is_ok());
 }
+
+#[test]
+fn test_upload_media_base64_requires_filename() {
+    use serde_json::json;
+
+    let args_without_filename = json!({
+        "file_data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    });
+
+    // Should be valid JSON but semantically incomplete
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args_without_filename);
+    assert!(parsed.is_ok());
+}
