@@ -832,10 +832,10 @@ impl MicropubMcp {
                 PromptMessage::new_text(
                     PromptMessageRole::Assistant,
                     format!(
-                        "I'll help you create a photo post about {}. Please provide:\n\
-                         1. The photo file path or URL\n\
-                         2. A caption for the photo\n\
-                         3. Any additional context or description",
+                        "I'll help you create a photo post about {}. You can:\n\
+                         1. Upload the image first with 'upload_media' tool, then use the URL\n\
+                         2. Reference a local file (e.g., ~/Pictures/photo.jpg) and I'll auto-upload when publishing\n\n\
+                         Please provide the photo path and a caption.",
                         subject
                     ),
                 ),
@@ -1049,7 +1049,11 @@ impl ServerHandler for MicropubMcp {
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Micropub MCP server for posting and managing micropub content via AI assistants"
+                "Micropub MCP server for posting and managing micropub content via AI assistants.\n\n\
+                 IMAGE UPLOADS:\n\
+                 - Use 'upload_media' tool to upload images explicitly (supports file paths or base64 data)\n\
+                 - Or use 'publish_post' with local image paths (e.g., ![alt](~/photo.jpg)) - they'll auto-upload\n\n\
+                 All uploads require authentication via 'micropub auth <domain>' first."
                     .to_string(),
             ),
         }
