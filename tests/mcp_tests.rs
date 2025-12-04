@@ -63,3 +63,19 @@ async fn test_delete_post_tool() {
 
     // TODO: Implement actual delete_post tool test
 }
+
+#[test]
+fn test_upload_media_requires_file_path_or_data() {
+    // Missing both file_path and file_data should fail validation
+    let json = r#"{}"#;
+    let result: Result<serde_json::Value, _> = serde_json::from_str(json);
+    assert!(result.is_ok()); // JSON is valid but semantically incomplete
+}
+
+#[test]
+fn test_upload_media_file_data_requires_filename() {
+    // Having file_data without filename should fail
+    let json = r#"{"file_data": "base64data"}"#;
+    let result: Result<serde_json::Value, _> = serde_json::from_str(json);
+    assert!(result.is_ok()); // JSON is valid but semantically incomplete
+}

@@ -97,6 +97,26 @@ pub struct ListMediaArgs {
     pub offset: usize,
 }
 
+/// Parameters for upload_media tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UploadMediaArgs {
+    /// Path to local file (e.g., ~/Pictures/photo.jpg)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+
+    /// Base64-encoded file data (alternative to file_path)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_data: Option<String>,
+
+    /// Filename (required when using file_data)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+
+    /// Optional alt text for accessibility
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_text: Option<String>,
+}
+
 fn default_limit() -> usize {
     10
 }
@@ -564,6 +584,46 @@ impl MicropubMcp {
         }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    /// Upload a media file to the micropub media endpoint
+    #[tool(
+        description = "Upload an image or media file to your micropub site. Supports local file paths (e.g., ~/Pictures/photo.jpg) or base64-encoded data. Returns URL and markdown snippet for use in posts."
+    )]
+    async fn upload_media(
+        &self,
+        Parameters(args): Parameters<UploadMediaArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate: must have file_path OR (file_data + filename)
+        let has_path = args.file_path.is_some();
+        let has_data = args.file_data.is_some();
+        let has_filename = args.filename.is_some();
+
+        if !has_path && !has_data {
+            return Err(McpError::invalid_params(
+                "Must provide either file_path OR file_data".to_string(),
+                None,
+            ));
+        }
+
+        if has_path && has_data {
+            return Err(McpError::invalid_params(
+                "Cannot provide both file_path and file_data".to_string(),
+                None,
+            ));
+        }
+
+        if has_data && !has_filename {
+            return Err(McpError::invalid_params(
+                "filename is required when using file_data".to_string(),
+                None,
+            ));
+        }
+
+        // TODO: Implement upload logic
+        Ok(CallToolResult::success(vec![Content::text(
+            "Upload not yet implemented",
+        )]))
     }
 }
 
