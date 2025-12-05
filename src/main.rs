@@ -7,6 +7,7 @@ use micropub::Result;
 
 #[derive(Parser)]
 #[command(name = "micropub")]
+#[command(version)]
 #[command(about = "Ultra-compliant Micropub CLI", long_about = None)]
 struct Cli {
     /// Enable verbose output
