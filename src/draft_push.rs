@@ -1,9 +1,10 @@
 // ABOUTME: Draft push functionality for server-side drafts
 // ABOUTME: Handles pushing local drafts to server with post-status: draft
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
 use crate::config::{load_token, Config};
@@ -17,9 +18,35 @@ pub struct PushResult {
     pub uploads: Vec<(String, String)>,
 }
 
+/// Validate draft_id to prevent path traversal and null byte injection
+fn validate_draft_id(draft_id: &str) -> Result<()> {
+    // Check for null bytes
+    if draft_id.contains('\0') {
+        bail!("Draft ID contains null byte");
+    }
+
+    // Check for path traversal attempts
+    if draft_id.contains("..") || draft_id.contains('/') || draft_id.contains('\\') {
+        bail!("Draft ID contains invalid path characters");
+    }
+
+    // Ensure only alphanumeric, hyphens, and underscores
+    if !draft_id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("Draft ID must contain only alphanumeric characters, hyphens, and underscores");
+    }
+
+    Ok(())
+}
+
 /// Push a draft to the server as a server-side draft
 /// ABOUTME: Loads draft, validates it, and sends to server with post-status: draft
 pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> Result<PushResult> {
+    // Validate draft_id before using it
+    validate_draft_id(draft_id)?;
+
     // Load draft
     let mut draft = Draft::load(draft_id)?;
 
@@ -41,13 +68,23 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
     // Load token
     let token = load_token(profile_name)?;
 
-    // Collect media references
-    let mut media_refs = find_media_references(&draft.content);
+    // Collect media references and deduplicate them
+    let mut media_refs_set: HashSet<String> = HashSet::new();
+
+    // Add references from content
+    for ref_path in find_media_references(&draft.content) {
+        media_refs_set.insert(ref_path);
+    }
+
+    // Add local photo references (skip remote URLs)
     for photo_path in &draft.metadata.photo {
         if !photo_path.starts_with("http://") && !photo_path.starts_with("https://") {
-            media_refs.push(photo_path.clone());
+            media_refs_set.insert(photo_path.clone());
         }
     }
+
+    // Convert to Vec for iteration
+    let media_refs: Vec<String> = media_refs_set.into_iter().collect();
 
     // Upload media
     let mut replacements = Vec::new();
@@ -116,19 +153,23 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
     }
 
     if !draft.metadata.photo.is_empty() {
-        let photo_values: Vec<Value> = if !uploaded_photo_urls.is_empty() {
-            uploaded_photo_urls
-                .iter()
-                .map(|url| Value::String(url.clone()))
-                .collect()
-        } else {
-            draft
-                .metadata
-                .photo
-                .iter()
-                .map(|p| Value::String(p.clone()))
-                .collect()
-        };
+        // Build photo array: uploaded URLs + remote URLs
+        let mut photo_values: Vec<Value> = Vec::new();
+
+        for photo_path in &draft.metadata.photo {
+            if photo_path.starts_with("http://") || photo_path.starts_with("https://") {
+                // Keep remote URLs as-is
+                photo_values.push(Value::String(photo_path.clone()));
+            } else {
+                // Find the corresponding uploaded URL
+                if let Some((_, url)) = replacements.iter().find(|(local, _)| local == photo_path) {
+                    photo_values.push(Value::String(url.clone()));
+                } else {
+                    bail!("Photo file not found or not uploaded: {}", photo_path);
+                }
+            }
+        }
+
         properties.insert("photo".to_string(), Value::Array(photo_values));
     }
 
@@ -164,12 +205,28 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
     // Determine if this is an update or create
     let is_update = draft.metadata.url.is_some();
 
+    // Validate that we're not accidentally overwriting a published post
+    if is_update {
+        if let Some(status) = &draft.metadata.status {
+            if status != "server-draft" && status != "draft" {
+                bail!(
+                    "Cannot push draft with status '{}' - only server-draft or draft status can be updated. \
+                     This appears to be a published post.",
+                    status
+                );
+            }
+        }
+    }
+
     let request = if is_update {
         // Update existing server draft
         let mut replace = Map::new();
         replace.insert(
             "content".to_string(),
-            properties.get("content").unwrap().clone(),
+            properties
+                .get("content")
+                .context("Content property missing when building update request")?
+                .clone(),
         );
         if let Some(name) = properties.get("name") {
             replace.insert("name".to_string(), name.clone());
@@ -185,6 +242,9 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
         }
         if let Some(post_status) = properties.get("post-status") {
             replace.insert("post-status".to_string(), post_status.clone());
+        }
+        if let Some(syndicate_to) = properties.get("mp-syndicate-to") {
+            replace.insert("mp-syndicate-to".to_string(), syndicate_to.clone());
         }
 
         MicropubRequest {
@@ -222,7 +282,10 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
     draft.metadata.url = Some(server_url.clone());
 
     // Save updated draft (stays in drafts directory)
-    draft.save()?;
+    draft.save().context(
+        "Failed to save draft metadata after successful push. \
+         The draft was successfully pushed to the server, but local metadata could not be updated.",
+    )?;
 
     println!("✓ Draft pushed successfully!");
     println!("  URL: {}", server_url);
