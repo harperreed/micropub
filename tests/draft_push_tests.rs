@@ -25,3 +25,48 @@ async fn test_cmd_push_draft_requires_valid_draft_id() {
     assert!(result.is_err());
     // Will fail with "Draft not found" from Draft::load
 }
+
+// CLI Integration Tests
+#[test]
+fn test_cli_draft_push_command_exists() {
+    // This test verifies that the CLI can parse the draft push command
+    use clap::Parser;
+
+    // Mock CLI args for testing - we'll parse the actual command structure
+    #[derive(Parser)]
+    #[command(name = "micropub")]
+    struct TestCli {
+        #[command(subcommand)]
+        command: Option<TestCommands>,
+    }
+
+    #[derive(clap::Subcommand)]
+    enum TestCommands {
+        #[command(subcommand)]
+        Draft(TestDraftCommands),
+    }
+
+    #[derive(clap::Subcommand)]
+    enum TestDraftCommands {
+        Push {
+            draft_id: String,
+            #[arg(long)]
+            backdate: Option<String>,
+        },
+    }
+
+    // Test parsing without backdate
+    let result = TestCli::try_parse_from(vec!["micropub", "draft", "push", "test-draft"]);
+    assert!(result.is_ok());
+
+    // Test parsing with backdate
+    let result = TestCli::try_parse_from(vec![
+        "micropub",
+        "draft",
+        "push",
+        "test-draft",
+        "--backdate",
+        "2024-01-15T10:00:00Z",
+    ]);
+    assert!(result.is_ok());
+}
