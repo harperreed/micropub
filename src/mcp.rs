@@ -25,6 +25,7 @@ use rmcp::{schemars, RoleServer, ServerHandler, ServiceExt};
 
 use crate::config::Config;
 use crate::draft::Draft;
+use crate::draft_push::validate_draft_id;
 use crate::publish;
 
 /// Parameters for publish_post tool
@@ -341,23 +342,8 @@ impl MicropubMcp {
         Parameters(args): Parameters<PublishBackdateArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Validate draft_id format to prevent path traversal
-        if args.draft_id.is_empty() {
-            return Err(McpError::invalid_params(
-                "Draft ID cannot be empty".to_string(),
-                None,
-            ));
-        }
-        if !args
-            .draft_id
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(McpError::invalid_params(
-                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
-                    .to_string(),
-                None,
-            ));
-        }
+        validate_draft_id(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid draft ID: {}", e), None))?;
 
         // Parse the date
         let parsed_date = DateTime::parse_from_rfc3339(&args.date)
@@ -541,23 +527,8 @@ impl MicropubMcp {
         Parameters(args): Parameters<ViewDraftArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Validate draft_id format to prevent path traversal
-        if args.draft_id.is_empty() {
-            return Err(McpError::invalid_params(
-                "Draft ID cannot be empty".to_string(),
-                None,
-            ));
-        }
-        if !args
-            .draft_id
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(McpError::invalid_params(
-                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
-                    .to_string(),
-                None,
-            ));
-        }
+        validate_draft_id(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid draft ID: {}", e), None))?;
 
         let draft = Draft::load(&args.draft_id)
             .map_err(|e| McpError::invalid_params(format!("Failed to load draft: {}", e), None))?;
@@ -784,23 +755,8 @@ impl MicropubMcp {
         Parameters(args): Parameters<PushDraftArgs>,
     ) -> Result<CallToolResult, McpError> {
         // Validate draft_id format to prevent path traversal
-        if args.draft_id.is_empty() {
-            return Err(McpError::invalid_params(
-                "Draft ID cannot be empty".to_string(),
-                None,
-            ));
-        }
-        if !args
-            .draft_id
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(McpError::invalid_params(
-                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
-                    .to_string(),
-                None,
-            ));
-        }
+        validate_draft_id(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid draft ID: {}", e), None))?;
 
         // Parse backdate if provided
         let backdate_parsed = if let Some(date_str) = args.backdate {

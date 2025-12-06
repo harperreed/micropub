@@ -19,7 +19,7 @@ pub struct PushResult {
 }
 
 /// Validate draft_id to prevent path traversal and null byte injection
-fn validate_draft_id(draft_id: &str) -> Result<()> {
+pub fn validate_draft_id(draft_id: &str) -> Result<()> {
     // Check for null bytes
     if draft_id.contains('\0') {
         bail!("Draft ID contains null byte");
@@ -207,8 +207,11 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
 
     // Validate that we're not accidentally overwriting a published post
     if is_update {
-        if let Some(status) = &draft.metadata.status {
-            if status != "server-draft" && status != "draft" {
+        match draft.metadata.status.as_deref() {
+            Some("server-draft") | Some("draft") | None => {
+                // Safe to update: server-draft, draft, or no status
+            }
+            Some(status) => {
                 bail!(
                     "Cannot push draft with status '{}' - only server-draft or draft status can be updated. \
                      This appears to be a published post.",

@@ -1,13 +1,15 @@
 // ABOUTME: Post publishing functionality
 // ABOUTME: Orchestrates draft loading, media upload, and micropub posting
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+use std::collections::HashSet;
 
 use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
 use crate::config::{load_token, Config};
 use crate::draft::Draft;
+use crate::draft_push::validate_draft_id;
 use crate::media::{find_media_references, replace_paths, resolve_path, upload_file};
 
 pub async fn cmd_publish(
@@ -19,6 +21,9 @@ pub async fn cmd_publish(
         .file_stem()
         .and_then(|s| s.to_str())
         .context("Invalid draft path")?;
+
+    // Validate draft ID to prevent path traversal
+    validate_draft_id(draft_id)?;
 
     // Load draft
     let mut draft = Draft::load(draft_id)?;
@@ -41,16 +46,23 @@ pub async fn cmd_publish(
     // Load token
     let token = load_token(profile_name)?;
 
-    // Collect all media files to upload (from content and photo metadata)
-    let mut media_refs = find_media_references(&draft.content);
+    // Collect media references and deduplicate them
+    let mut media_refs_set: HashSet<String> = HashSet::new();
 
-    // Also include photos from metadata that look like local paths
+    // Add references from content
+    for ref_path in find_media_references(&draft.content) {
+        media_refs_set.insert(ref_path);
+    }
+
+    // Add local photo references (skip remote URLs)
     for photo_path in &draft.metadata.photo {
-        // Check if it's a local path (not a URL)
         if !photo_path.starts_with("http://") && !photo_path.starts_with("https://") {
-            media_refs.push(photo_path.clone());
+            media_refs_set.insert(photo_path.clone());
         }
     }
+
+    // Convert to Vec for iteration
+    let media_refs: Vec<String> = media_refs_set.into_iter().collect();
 
     let mut replacements = Vec::new();
     let mut uploaded_photo_urls = Vec::new();
@@ -119,23 +131,23 @@ pub async fn cmd_publish(
         );
     }
 
-    // Use uploaded photo URLs if we have them, otherwise use original values (for URLs)
     if !draft.metadata.photo.is_empty() {
-        let photo_values: Vec<Value> = if !uploaded_photo_urls.is_empty() {
-            // Use uploaded URLs
-            uploaded_photo_urls
-                .iter()
-                .map(|url| Value::String(url.clone()))
-                .collect()
-        } else {
-            // Keep original values (they must already be URLs)
-            draft
-                .metadata
-                .photo
-                .iter()
-                .map(|p| Value::String(p.clone()))
-                .collect()
-        };
+        // Build photo array: uploaded URLs + remote URLs
+        let mut photo_values: Vec<Value> = Vec::new();
+
+        for photo_path in &draft.metadata.photo {
+            if photo_path.starts_with("http://") || photo_path.starts_with("https://") {
+                // Keep remote URLs as-is
+                photo_values.push(Value::String(photo_path.clone()));
+            } else {
+                // Find the corresponding uploaded URL
+                if let Some((_, url)) = replacements.iter().find(|(local, _)| local == photo_path) {
+                    photo_values.push(Value::String(url.clone()));
+                } else {
+                    bail!("Photo file not found or not uploaded: {}", photo_path);
+                }
+            }
+        }
 
         properties.insert("photo".to_string(), Value::Array(photo_values));
     }
