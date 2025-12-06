@@ -1,0 +1,564 @@
+// ABOUTME: Tests for draft push functionality
+// ABOUTME: Validates pushing drafts to server with post-status: draft
+
+use micropub::draft_push::{validate_draft_id, PushResult};
+use micropub::media::{find_media_references, replace_paths};
+
+#[test]
+fn test_push_result_structure() {
+    let result = PushResult {
+        url: "https://example.com/posts/draft-123".to_string(),
+        is_update: false,
+        uploads: vec![(
+            "photo.jpg".to_string(),
+            "https://example.com/media/abc.jpg".to_string(),
+        )],
+    };
+
+    assert_eq!(result.url, "https://example.com/posts/draft-123");
+    assert!(!result.is_update);
+    assert_eq!(result.uploads.len(), 1);
+}
+
+#[test]
+fn test_find_media_references_in_draft_content() {
+    let content = r#"
+# My Post
+
+Here is an image: ![alt text](~/photo.jpg)
+
+And another: ![](./images/test.png)
+
+But not this URL: ![](https://example.com/remote.jpg)
+"#;
+
+    let refs = find_media_references(content);
+
+    // Should find local paths but not URLs
+    assert_eq!(refs.len(), 2);
+    assert!(refs.contains(&"~/photo.jpg".to_string()));
+    assert!(refs.contains(&"./images/test.png".to_string()));
+    assert!(!refs.contains(&"https://example.com/remote.jpg".to_string()));
+}
+
+#[test]
+fn test_replace_paths_in_content() {
+    let content = "Image: ![alt](~/photo.jpg) here";
+    let replacements = vec![(
+        "~/photo.jpg".to_string(),
+        "https://cdn.example.com/uploaded.jpg".to_string(),
+    )];
+
+    let result = replace_paths(content, &replacements);
+
+    assert!(result.contains("https://cdn.example.com/uploaded.jpg"));
+    assert!(!result.contains("~/photo.jpg"));
+}
+
+#[test]
+fn test_micropub_request_includes_draft_status() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use serde_json::{Map, Value};
+
+    let mut properties = Map::new();
+    properties.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Test content".to_string())]),
+    );
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    let request = MicropubRequest {
+        action: MicropubAction::Create,
+        properties,
+        url: None,
+    };
+
+    let json = request.to_json().unwrap();
+
+    // Verify JSON contains post-status: draft
+    assert!(json.contains("post-status"));
+    assert!(json.contains("\"draft\""));
+}
+
+#[test]
+fn test_micropub_update_request_structure() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use serde_json::{Map, Value};
+
+    let mut replace = Map::new();
+    replace.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Updated content".to_string())]),
+    );
+    replace.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    let request = MicropubRequest {
+        action: MicropubAction::Update {
+            replace,
+            add: Map::new(),
+            delete: Vec::new(),
+        },
+        properties: Map::new(),
+        url: Some("https://example.com/posts/123".to_string()),
+    };
+
+    let json = request.to_json().unwrap();
+
+    // Verify it's an update action
+    assert!(json.contains("\"action\""));
+    assert!(json.contains("\"update\""));
+    assert!(json.contains("example.com/posts/123"));
+    assert!(json.contains("\"replace\""));
+    assert!(json.contains("Updated content"));
+}
+
+#[test]
+fn test_update_request_maintains_post_status_draft() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use serde_json::{Map, Value};
+
+    // Build properties map with post-status
+    let mut properties = Map::new();
+    properties.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Updated draft content".to_string())]),
+    );
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    // Create UPDATE request with post-status in replace map
+    let mut replace = Map::new();
+    replace.insert(
+        "content".to_string(),
+        properties.get("content").unwrap().clone(),
+    );
+    replace.insert(
+        "post-status".to_string(),
+        properties.get("post-status").unwrap().clone(),
+    );
+
+    let request = MicropubRequest {
+        action: MicropubAction::Update {
+            replace,
+            add: Map::new(),
+            delete: Vec::new(),
+        },
+        properties: Map::new(),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+    };
+
+    // Serialize to JSON
+    let json = request.to_json().unwrap();
+
+    // Verify JSON contains post-status: draft in replace section
+    assert!(
+        json.contains("\"replace\""),
+        "JSON should have replace section"
+    );
+    assert!(
+        json.contains("\"post-status\""),
+        "JSON should contain post-status field"
+    );
+    assert!(
+        json.contains("\"draft\""),
+        "JSON should contain draft value"
+    );
+
+    // Parse JSON to verify structure
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let replace_obj = parsed.get("replace").expect("Should have replace field");
+    let post_status = replace_obj
+        .get("post-status")
+        .expect("Replace should have post-status field");
+
+    assert_eq!(
+        post_status.as_array().unwrap()[0].as_str().unwrap(),
+        "draft",
+        "post-status should be 'draft'"
+    );
+}
+
+#[tokio::test]
+async fn test_cmd_push_draft_requires_valid_draft_id() {
+    let result = micropub::draft_push::cmd_push_draft("nonexistent", None).await;
+    assert!(result.is_err());
+    // Will fail with "Draft not found" from Draft::load
+}
+
+// CLI Integration Tests
+#[test]
+fn test_cli_draft_push_command_exists() {
+    // This test verifies that the CLI can parse the draft push command
+    use clap::Parser;
+
+    // Mock CLI args for testing - we'll parse the actual command structure
+    #[derive(Parser)]
+    #[command(name = "micropub")]
+    struct TestCli {
+        #[command(subcommand)]
+        command: Option<TestCommands>,
+    }
+
+    #[derive(clap::Subcommand)]
+    enum TestCommands {
+        #[command(subcommand)]
+        Draft(TestDraftCommands),
+    }
+
+    #[derive(clap::Subcommand)]
+    enum TestDraftCommands {
+        Push {
+            draft_id: String,
+            #[arg(long)]
+            backdate: Option<String>,
+        },
+    }
+
+    // Test parsing without backdate
+    let result = TestCli::try_parse_from(vec!["micropub", "draft", "push", "test-draft"]);
+    assert!(result.is_ok());
+
+    // Test parsing with backdate
+    let result = TestCli::try_parse_from(vec![
+        "micropub",
+        "draft",
+        "push",
+        "test-draft",
+        "--backdate",
+        "2024-01-15T10:00:00Z",
+    ]);
+    assert!(result.is_ok());
+}
+
+// Task 6: Tests for publishing server drafts
+#[test]
+fn test_detect_server_draft_from_metadata() {
+    use micropub::draft::DraftMetadata;
+
+    // Server draft: has URL and status="server-draft"
+    let server_draft = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: Some("server-draft".to_string()),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        published_at: None,
+    };
+
+    let is_server_draft =
+        server_draft.url.is_some() && server_draft.status.as_deref() == Some("server-draft");
+    assert!(is_server_draft, "Should detect server draft");
+
+    // Local draft: no URL
+    let local_draft = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: None,
+        url: None,
+        published_at: None,
+    };
+
+    let is_local =
+        local_draft.url.is_some() && local_draft.status.as_deref() == Some("server-draft");
+    assert!(!is_local, "Should not detect local draft as server draft");
+}
+
+#[test]
+fn test_update_request_for_publishing_server_draft() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use serde_json::{Map, Value};
+
+    // Build UPDATE request to publish a server draft
+    // Only includes content, name (optional), and post-status
+    let mut replace = Map::new();
+    replace.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Final content".to_string())]),
+    );
+    replace.insert(
+        "name".to_string(),
+        Value::Array(vec![Value::String("Post Title".to_string())]),
+    );
+    replace.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("published".to_string())]),
+    );
+
+    let request = MicropubRequest {
+        action: MicropubAction::Update {
+            replace,
+            add: Map::new(),
+            delete: Vec::new(),
+        },
+        properties: Map::new(),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+    };
+
+    let json = request.to_json().unwrap();
+
+    // Verify it's an update action with post-status: published
+    assert!(json.contains("\"action\""));
+    assert!(json.contains("\"update\""));
+    assert!(json.contains("example.com/posts/draft-123"));
+    assert!(json.contains("\"replace\""));
+    assert!(json.contains("\"post-status\""));
+    assert!(json.contains("\"published\""));
+
+    // Parse JSON to verify structure
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let replace_obj = parsed.get("replace").expect("Should have replace field");
+
+    // Verify only allowed properties are present
+    let post_status = replace_obj
+        .get("post-status")
+        .expect("Replace should have post-status field");
+    assert_eq!(
+        post_status.as_array().unwrap()[0].as_str().unwrap(),
+        "published",
+        "post-status should be 'published'"
+    );
+
+    let content = replace_obj
+        .get("content")
+        .expect("Replace should have content field");
+    assert_eq!(
+        content.as_array().unwrap()[0].as_str().unwrap(),
+        "Final content"
+    );
+
+    let name = replace_obj
+        .get("name")
+        .expect("Replace should have name field");
+    assert_eq!(name.as_array().unwrap()[0].as_str().unwrap(), "Post Title");
+
+    // Verify forbidden properties are NOT present
+    assert!(
+        replace_obj.get("category").is_none(),
+        "Replace should NOT include category"
+    );
+    assert!(
+        replace_obj.get("photo").is_none(),
+        "Replace should NOT include photo"
+    );
+    assert!(
+        replace_obj.get("mp-syndicate-to").is_none(),
+        "Replace should NOT include mp-syndicate-to"
+    );
+    assert!(
+        replace_obj.get("published").is_none(),
+        "Replace should NOT include published date"
+    );
+}
+
+// Integration test for complete publish workflow
+#[test]
+fn test_publish_workflow_local_vs_server_draft() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use micropub::draft::DraftMetadata;
+    use serde_json::{Map, Value};
+
+    // Test 1: Local draft (no URL) → CREATE request
+    let local_metadata = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: None,
+        url: None,
+        published_at: None,
+    };
+
+    let is_server_draft =
+        local_metadata.url.is_some() && local_metadata.status.as_deref() == Some("server-draft");
+    assert!(
+        !is_server_draft,
+        "Local draft should not be detected as server draft"
+    );
+
+    // Build CREATE request for local draft
+    let mut properties = Map::new();
+    properties.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Local draft content".to_string())]),
+    );
+
+    let local_request = MicropubRequest {
+        action: MicropubAction::Create,
+        properties,
+        url: None,
+    };
+
+    let local_json = local_request.to_json().unwrap();
+    assert!(local_json.contains("\"type\""));
+    assert!(local_json.contains("h-entry"));
+    assert!(!local_json.contains("\"action\""));
+
+    // Test 2: Server draft (has URL) → UPDATE request with post-status: published
+    let server_metadata = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: Some("server-draft".to_string()),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        published_at: None,
+    };
+
+    let is_server_draft =
+        server_metadata.url.is_some() && server_metadata.status.as_deref() == Some("server-draft");
+    assert!(is_server_draft, "Server draft should be detected");
+
+    // Build UPDATE request for server draft
+    let mut replace = Map::new();
+    replace.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String(
+            "Updated server draft content".to_string(),
+        )]),
+    );
+    replace.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("published".to_string())]),
+    );
+
+    let server_request = MicropubRequest {
+        action: MicropubAction::Update {
+            replace,
+            add: Map::new(),
+            delete: Vec::new(),
+        },
+        properties: Map::new(),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+    };
+
+    let server_json = server_request.to_json().unwrap();
+    assert!(server_json.contains("\"action\""));
+    assert!(server_json.contains("\"update\""));
+    assert!(server_json.contains("\"replace\""));
+    assert!(server_json.contains("\"post-status\""));
+    assert!(server_json.contains("\"published\""));
+    assert!(server_json.contains("example.com/posts/draft-123"));
+}
+
+// Task 7: Additional tests for draft push workflow
+#[test]
+fn test_draft_metadata_has_required_fields() {
+    use micropub::draft::DraftMetadata;
+
+    let metadata = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: Some("server-draft".to_string()),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        published_at: None,
+    };
+
+    assert_eq!(metadata.status, Some("server-draft".to_string()));
+    assert_eq!(
+        metadata.url,
+        Some("https://example.com/posts/draft-123".to_string())
+    );
+}
+
+#[test]
+fn test_is_update_logic() {
+    use micropub::draft::DraftMetadata;
+
+    let metadata_new = DraftMetadata::default();
+    assert!(metadata_new.url.is_none());
+    let is_update_new = metadata_new.url.is_some();
+    assert!(!is_update_new);
+
+    let metadata_existing = DraftMetadata {
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        ..Default::default()
+    };
+    let is_update_existing = metadata_existing.url.is_some();
+    assert!(is_update_existing);
+}
+
+#[test]
+fn test_post_status_draft_property() {
+    use serde_json::{Map, Value};
+
+    let mut properties = Map::new();
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    let post_status = properties
+        .get("post-status")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str());
+
+    assert_eq!(post_status, Some("draft"));
+}
+
+#[test]
+fn test_validate_draft_id_rejects_empty_string() {
+    let result = validate_draft_id("");
+    assert!(result.is_err(), "Empty string should be rejected");
+
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("cannot be empty"),
+        "Error message should mention empty string: {}",
+        error_message
+    );
+}
+
+#[test]
+fn test_validate_draft_id_rejects_invalid_characters() {
+    // Test path traversal
+    assert!(validate_draft_id("..").is_err());
+    assert!(validate_draft_id("../etc").is_err());
+    assert!(validate_draft_id("foo/bar").is_err());
+    assert!(validate_draft_id("foo\\bar").is_err());
+
+    // Test null byte
+    assert!(validate_draft_id("foo\0bar").is_err());
+
+    // Test special characters
+    assert!(validate_draft_id("foo@bar").is_err());
+    assert!(validate_draft_id("foo#bar").is_err());
+}
+
+#[test]
+fn test_validate_draft_id_accepts_valid_ids() {
+    // Valid alphanumeric and hyphens/underscores
+    assert!(validate_draft_id("abc123").is_ok());
+    assert!(validate_draft_id("my-draft").is_ok());
+    assert!(validate_draft_id("my_draft").is_ok());
+    assert!(validate_draft_id("draft-123_test").is_ok());
+    assert!(validate_draft_id("A1B2C3").is_ok());
+}

@@ -1,5 +1,5 @@
-// ABOUTME: Post publishing functionality
-// ABOUTME: Orchestrates draft loading, media upload, and micropub posting
+// ABOUTME: Draft push functionality for server-side drafts
+// ABOUTME: Handles pushing local drafts to server with post-status: draft
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -9,20 +9,47 @@ use std::collections::HashSet;
 use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
 use crate::config::{load_token, Config};
 use crate::draft::Draft;
-use crate::draft_push::validate_draft_id;
 use crate::media::{find_media_references, replace_paths, resolve_path, upload_file};
 
-pub async fn cmd_publish(
-    draft_path: &str,
-    backdate: Option<DateTime<Utc>>,
-) -> Result<Vec<(String, String)>> {
-    // Extract draft ID from path
-    let draft_id = std::path::Path::new(draft_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .context("Invalid draft path")?;
+#[derive(Debug, Clone, PartialEq)]
+pub struct PushResult {
+    pub url: String,
+    pub is_update: bool,
+    pub uploads: Vec<(String, String)>,
+}
 
-    // Validate draft ID to prevent path traversal
+/// Validate draft_id to prevent path traversal and null byte injection
+pub fn validate_draft_id(draft_id: &str) -> Result<()> {
+    // Check for empty string (vacuous truth issue)
+    if draft_id.is_empty() {
+        bail!("Draft ID cannot be empty");
+    }
+
+    // Check for null bytes
+    if draft_id.contains('\0') {
+        bail!("Draft ID contains null byte");
+    }
+
+    // Check for path traversal attempts
+    if draft_id.contains("..") || draft_id.contains('/') || draft_id.contains('\\') {
+        bail!("Draft ID contains invalid path characters");
+    }
+
+    // Ensure only alphanumeric, hyphens, and underscores
+    if !draft_id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("Draft ID must contain only alphanumeric characters, hyphens, and underscores");
+    }
+
+    Ok(())
+}
+
+/// Push a draft to the server as a server-side draft
+/// ABOUTME: Loads draft, validates it, and sends to server with post-status: draft
+pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> Result<PushResult> {
+    // Validate draft_id before using it
     validate_draft_id(draft_id)?;
 
     // Load draft
@@ -31,7 +58,7 @@ pub async fn cmd_publish(
     // Load config
     let config = Config::load()?;
 
-    // Determine which profile to use
+    // Determine profile
     let profile_name = draft
         .metadata
         .profile
@@ -64,16 +91,16 @@ pub async fn cmd_publish(
     // Convert to Vec for iteration
     let media_refs: Vec<String> = media_refs_set.into_iter().collect();
 
+    // Upload media
     let mut replacements = Vec::new();
     let mut uploaded_photo_urls = Vec::new();
     let mut upload_results = Vec::new();
 
     if !media_refs.is_empty() {
-        let media_endpoint = profile.media_endpoint.as_ref()
-            .context(format!(
-                "No media endpoint found for profile '{}'. Re-authenticate to discover media endpoint:\n  micropub auth {}",
-                profile_name, profile.domain
-            ))?;
+        let media_endpoint = profile.media_endpoint.as_ref().context(format!(
+            "No media endpoint found for profile '{}'. Re-authenticate:\n  micropub auth {}",
+            profile_name, profile.domain
+        ))?;
 
         println!("Uploading {} media file(s)...", media_refs.len());
 
@@ -93,21 +120,20 @@ pub async fn cmd_publish(
             upload_results.push((filename, url.clone()));
             replacements.push((local_path.clone(), url.clone()));
 
-            // If this was from photo metadata, save the URL
             if draft.metadata.photo.contains(&local_path) {
                 uploaded_photo_urls.push(url);
             }
         }
     }
 
-    // Replace local paths with URLs in content
+    // Replace paths in content
     let final_content = replace_paths(&draft.content, &replacements);
 
-    // Build micropub request
+    // Build micropub request properties
     let mut properties = Map::new();
     properties.insert(
         "content".to_string(),
-        Value::Array(vec![Value::String(final_content.clone())]),
+        Value::Array(vec![Value::String(final_content)]),
     );
 
     if let Some(name) = &draft.metadata.name {
@@ -166,7 +192,7 @@ pub async fn cmd_publish(
         );
     }
 
-    // Handle published date (backdate or from draft)
+    // Handle published date
     let published_date = backdate.or(draft.metadata.published);
     if let Some(date) = published_date {
         properties.insert(
@@ -175,34 +201,59 @@ pub async fn cmd_publish(
         );
     }
 
-    // Check if this draft already exists on the server
-    let is_server_draft =
-        draft.metadata.url.is_some() && draft.metadata.status.as_deref() == Some("server-draft");
+    // CRITICAL: Set post-status to draft
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
 
-    let request = if is_server_draft {
-        // Update existing server draft to published
-        let url = draft.metadata.url.clone().unwrap();
+    // Determine if this is an update or create
+    let is_update = draft.metadata.url.is_some();
 
+    // Validate that we're not accidentally overwriting a published post
+    if is_update {
+        match draft.metadata.status.as_deref() {
+            Some("server-draft") | Some("draft") | None => {
+                // Safe to update: server-draft, draft, or no status
+            }
+            Some(status) => {
+                bail!(
+                    "Cannot push draft with status '{}' - only server-draft or draft status can be updated. \
+                     This appears to be a published post.",
+                    status
+                );
+            }
+        }
+    }
+
+    let request = if is_update {
+        // Update existing server draft
         let mut replace = Map::new();
-
-        // Only update content, name (if present), and post-status when publishing
         replace.insert(
             "content".to_string(),
-            Value::Array(vec![Value::String(final_content.clone())]),
+            properties
+                .get("content")
+                .context("Content property missing when building update request")?
+                .clone(),
         );
-
-        if let Some(name) = &draft.metadata.name {
-            replace.insert(
-                "name".to_string(),
-                Value::Array(vec![Value::String(name.clone())]),
-            );
+        if let Some(name) = properties.get("name") {
+            replace.insert("name".to_string(), name.clone());
         }
-
-        // Change post-status from draft to published
-        replace.insert(
-            "post-status".to_string(),
-            Value::Array(vec![Value::String("published".to_string())]),
-        );
+        if let Some(category) = properties.get("category") {
+            replace.insert("category".to_string(), category.clone());
+        }
+        if let Some(photo) = properties.get("photo") {
+            replace.insert("photo".to_string(), photo.clone());
+        }
+        if let Some(published) = properties.get("published") {
+            replace.insert("published".to_string(), published.clone());
+        }
+        if let Some(post_status) = properties.get("post-status") {
+            replace.insert("post-status".to_string(), post_status.clone());
+        }
+        if let Some(syndicate_to) = properties.get("mp-syndicate-to") {
+            replace.insert("mp-syndicate-to".to_string(), syndicate_to.clone());
+        }
 
         MicropubRequest {
             action: MicropubAction::Update {
@@ -211,10 +262,10 @@ pub async fn cmd_publish(
                 delete: Vec::new(),
             },
             properties: Map::new(),
-            url: Some(url),
+            url: draft.metadata.url.clone(),
         }
     } else {
-        // Create new published post (existing behavior)
+        // Create new server draft
         MicropubRequest {
             action: MicropubAction::Create,
             properties,
@@ -230,21 +281,26 @@ pub async fn cmd_publish(
 
     let client = MicropubClient::new(micropub_endpoint.clone(), token);
 
-    println!("Publishing to {}...", profile.domain);
+    println!("Pushing draft to {}...", profile.domain);
     let response = client.send(&request).await?;
 
-    // Archive draft with metadata
-    draft.metadata.status = Some("published".to_string());
-    draft.metadata.url = response.url.clone();
-    draft.metadata.published_at = Some(Utc::now());
+    // Update draft metadata
+    let server_url = response.url.clone().context("Server didn't return URL")?;
+    draft.metadata.status = Some("server-draft".to_string());
+    draft.metadata.url = Some(server_url.clone());
 
-    let archive_path = draft.archive()?;
+    // Save updated draft (stays in drafts directory)
+    draft.save().context(
+        "Failed to save draft metadata after successful push. \
+         The draft was successfully pushed to the server, but local metadata could not be updated.",
+    )?;
 
-    println!("✓ Published successfully!");
-    if let Some(url) = response.url {
-        println!("  URL: {}", url);
-    }
-    println!("  Draft archived to: {}", archive_path.display());
+    println!("✓ Draft pushed successfully!");
+    println!("  URL: {}", server_url);
 
-    Ok(upload_results)
+    Ok(PushResult {
+        url: server_url,
+        is_update,
+        uploads: upload_results,
+    })
 }

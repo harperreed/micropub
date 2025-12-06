@@ -5,6 +5,7 @@ pub mod auth;
 pub mod client;
 pub mod config;
 pub mod draft;
+pub mod draft_push;
 pub mod mcp;
 pub mod media;
 pub mod operations;

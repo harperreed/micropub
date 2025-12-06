@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-12-06
+
 ### Added
+- **Server-side Draft Support**: Push local drafts to server with `post-status: draft`
+  - New CLI command: `micropub draft push <draft-id> [--backdate <date>]`
+  - New MCP tool: `push_draft` for AI assistant integration
+  - Drafts can be re-pushed to update server version without creating duplicates
+  - Publishing server drafts sends UPDATE request to change status from draft to published
+  - Supports media upload and backdating when pushing drafts
+  - `draft list` command shows server status (local-only vs. on-server)
 - MCP `upload_media` tool for explicit image uploads
   - Supports file path and base64 data upload
   - Returns structured JSON with URL, filename, mime_type, and markdown
@@ -21,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `cmd_publish` now returns upload details (filename, URL pairs)
 - Tool descriptions updated to mention automatic image upload
+- Draft metadata now tracks server URL and publish status for pushed drafts
 
 ## [0.2.0] - 2025-01-28
 

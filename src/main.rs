@@ -121,6 +121,14 @@ enum DraftCommands {
         /// Search query
         query: String,
     },
+    /// Push a draft to the server as a server-side draft
+    Push {
+        /// Draft ID to push
+        draft_id: String,
+        /// Backdate the draft (ISO 8601 format)
+        #[arg(long)]
+        backdate: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -189,6 +197,37 @@ async fn main() -> Result<()> {
             }
             DraftCommands::Search { query } => {
                 micropub::draft::cmd_search(&query)?;
+                Ok(())
+            }
+            DraftCommands::Push { draft_id, backdate } => {
+                use chrono::DateTime;
+                use micropub::draft_push;
+
+                let backdate_parsed = if let Some(date_str) = backdate {
+                    Some(DateTime::parse_from_rfc3339(&date_str)?.with_timezone(&chrono::Utc))
+                } else {
+                    None
+                };
+
+                let result = draft_push::cmd_push_draft(&draft_id, backdate_parsed).await?;
+
+                println!("Draft pushed to server!");
+                println!("  URL: {}", result.url);
+                println!(
+                    "  Status: {}",
+                    if result.is_update {
+                        "updated"
+                    } else {
+                        "created"
+                    }
+                );
+
+                if !result.uploads.is_empty() {
+                    println!("\nUploaded media:");
+                    for (filename, url) in result.uploads {
+                        println!("  - {} -> {}", filename, url);
+                    }
+                }
                 Ok(())
             }
         },
