@@ -286,10 +286,15 @@ fn test_update_request_for_publishing_server_draft() {
     use serde_json::{Map, Value};
 
     // Build UPDATE request to publish a server draft
+    // Only includes content, name (optional), and post-status
     let mut replace = Map::new();
     replace.insert(
         "content".to_string(),
         Value::Array(vec![Value::String("Final content".to_string())]),
+    );
+    replace.insert(
+        "name".to_string(),
+        Value::Array(vec![Value::String("Post Title".to_string())]),
     );
     replace.insert(
         "post-status".to_string(),
@@ -319,14 +324,46 @@ fn test_update_request_for_publishing_server_draft() {
     // Parse JSON to verify structure
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     let replace_obj = parsed.get("replace").expect("Should have replace field");
+
+    // Verify only allowed properties are present
     let post_status = replace_obj
         .get("post-status")
         .expect("Replace should have post-status field");
-
     assert_eq!(
         post_status.as_array().unwrap()[0].as_str().unwrap(),
         "published",
         "post-status should be 'published'"
+    );
+
+    let content = replace_obj
+        .get("content")
+        .expect("Replace should have content field");
+    assert_eq!(
+        content.as_array().unwrap()[0].as_str().unwrap(),
+        "Final content"
+    );
+
+    let name = replace_obj
+        .get("name")
+        .expect("Replace should have name field");
+    assert_eq!(name.as_array().unwrap()[0].as_str().unwrap(), "Post Title");
+
+    // Verify forbidden properties are NOT present
+    assert!(
+        replace_obj.get("category").is_none(),
+        "Replace should NOT include category"
+    );
+    assert!(
+        replace_obj.get("photo").is_none(),
+        "Replace should NOT include photo"
+    );
+    assert!(
+        replace_obj.get("mp-syndicate-to").is_none(),
+        "Replace should NOT include mp-syndicate-to"
+    );
+    assert!(
+        replace_obj.get("published").is_none(),
+        "Replace should NOT include published date"
     );
 }
 

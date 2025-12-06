@@ -173,7 +173,7 @@ pub async fn cmd_publish(
 
         let mut replace = Map::new();
 
-        // Add all properties to replace map
+        // Only update content, name (if present), and post-status when publishing
         replace.insert(
             "content".to_string(),
             Value::Array(vec![Value::String(final_content.clone())]),
@@ -183,58 +183,6 @@ pub async fn cmd_publish(
             replace.insert(
                 "name".to_string(),
                 Value::Array(vec![Value::String(name.clone())]),
-            );
-        }
-
-        if !draft.metadata.category.is_empty() {
-            replace.insert(
-                "category".to_string(),
-                Value::Array(
-                    draft
-                        .metadata
-                        .category
-                        .iter()
-                        .map(|c| Value::String(c.clone()))
-                        .collect(),
-                ),
-            );
-        }
-
-        if !draft.metadata.photo.is_empty() {
-            let photo_values: Vec<Value> = if !uploaded_photo_urls.is_empty() {
-                uploaded_photo_urls
-                    .iter()
-                    .map(|url| Value::String(url.clone()))
-                    .collect()
-            } else {
-                draft
-                    .metadata
-                    .photo
-                    .iter()
-                    .map(|p| Value::String(p.clone()))
-                    .collect()
-            };
-            replace.insert("photo".to_string(), Value::Array(photo_values));
-        }
-
-        if !draft.metadata.syndicate_to.is_empty() {
-            replace.insert(
-                "mp-syndicate-to".to_string(),
-                Value::Array(
-                    draft
-                        .metadata
-                        .syndicate_to
-                        .iter()
-                        .map(|s| Value::String(s.clone()))
-                        .collect(),
-                ),
-            );
-        }
-
-        if let Some(date) = published_date {
-            replace.insert(
-                "published".to_string(),
-                Value::Array(vec![Value::String(date.to_rfc3339())]),
             );
         }
 
