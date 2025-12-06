@@ -183,6 +183,9 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
         if let Some(published) = properties.get("published") {
             replace.insert("published".to_string(), published.clone());
         }
+        if let Some(post_status) = properties.get("post-status") {
+            replace.insert("post-status".to_string(), post_status.clone());
+        }
 
         MicropubRequest {
             action: MicropubAction::Update {

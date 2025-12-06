@@ -118,6 +118,74 @@ fn test_micropub_update_request_structure() {
     assert!(json.contains("Updated content"));
 }
 
+#[test]
+fn test_update_request_maintains_post_status_draft() {
+    use micropub::client::{MicropubAction, MicropubRequest};
+    use serde_json::{Map, Value};
+
+    // Build properties map with post-status
+    let mut properties = Map::new();
+    properties.insert(
+        "content".to_string(),
+        Value::Array(vec![Value::String("Updated draft content".to_string())]),
+    );
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    // Create UPDATE request with post-status in replace map
+    let mut replace = Map::new();
+    replace.insert(
+        "content".to_string(),
+        properties.get("content").unwrap().clone(),
+    );
+    replace.insert(
+        "post-status".to_string(),
+        properties.get("post-status").unwrap().clone(),
+    );
+
+    let request = MicropubRequest {
+        action: MicropubAction::Update {
+            replace,
+            add: Map::new(),
+            delete: Vec::new(),
+        },
+        properties: Map::new(),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+    };
+
+    // Serialize to JSON
+    let json = request.to_json().unwrap();
+
+    // Verify JSON contains post-status: draft in replace section
+    assert!(
+        json.contains("\"replace\""),
+        "JSON should have replace section"
+    );
+    assert!(
+        json.contains("\"post-status\""),
+        "JSON should contain post-status field"
+    );
+    assert!(
+        json.contains("\"draft\""),
+        "JSON should contain draft value"
+    );
+
+    // Parse JSON to verify structure
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let replace_obj = parsed.get("replace").expect("Should have replace field");
+    let post_status = replace_obj
+        .get("post-status")
+        .expect("Replace should have post-status field");
+
+    assert_eq!(
+        post_status.as_array().unwrap()[0].as_str().unwrap(),
+        "draft",
+        "post-status should be 'draft'"
+    );
+}
+
 #[tokio::test]
 async fn test_cmd_push_draft_requires_valid_draft_id() {
     let result = micropub::draft_push::cmd_push_draft("nonexistent", None).await;
