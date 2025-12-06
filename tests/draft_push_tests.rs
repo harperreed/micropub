@@ -1,7 +1,7 @@
 // ABOUTME: Tests for draft push functionality
 // ABOUTME: Validates pushing drafts to server with post-status: draft
 
-use micropub::draft_push::PushResult;
+use micropub::draft_push::{validate_draft_id, PushResult};
 use micropub::media::{find_media_references, replace_paths};
 
 #[test]
@@ -522,4 +522,43 @@ fn test_post_status_draft_property() {
         .and_then(|v| v.as_str());
 
     assert_eq!(post_status, Some("draft"));
+}
+
+#[test]
+fn test_validate_draft_id_rejects_empty_string() {
+    let result = validate_draft_id("");
+    assert!(result.is_err(), "Empty string should be rejected");
+
+    let error_message = result.unwrap_err().to_string();
+    assert!(
+        error_message.contains("cannot be empty"),
+        "Error message should mention empty string: {}",
+        error_message
+    );
+}
+
+#[test]
+fn test_validate_draft_id_rejects_invalid_characters() {
+    // Test path traversal
+    assert!(validate_draft_id("..").is_err());
+    assert!(validate_draft_id("../etc").is_err());
+    assert!(validate_draft_id("foo/bar").is_err());
+    assert!(validate_draft_id("foo\\bar").is_err());
+
+    // Test null byte
+    assert!(validate_draft_id("foo\0bar").is_err());
+
+    // Test special characters
+    assert!(validate_draft_id("foo@bar").is_err());
+    assert!(validate_draft_id("foo#bar").is_err());
+}
+
+#[test]
+fn test_validate_draft_id_accepts_valid_ids() {
+    // Valid alphanumeric and hyphens/underscores
+    assert!(validate_draft_id("abc123").is_ok());
+    assert!(validate_draft_id("my-draft").is_ok());
+    assert!(validate_draft_id("my_draft").is_ok());
+    assert!(validate_draft_id("draft-123_test").is_ok());
+    assert!(validate_draft_id("A1B2C3").is_ok());
 }

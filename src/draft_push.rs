@@ -20,6 +20,11 @@ pub struct PushResult {
 
 /// Validate draft_id to prevent path traversal and null byte injection
 pub fn validate_draft_id(draft_id: &str) -> Result<()> {
+    // Check for empty string (vacuous truth issue)
+    if draft_id.is_empty() {
+        bail!("Draft ID cannot be empty");
+    }
+
     // Check for null bytes
     if draft_id.contains('\0') {
         bail!("Draft ID contains null byte");
