@@ -118,6 +118,17 @@ pub struct UploadMediaArgs {
     pub alt_text: Option<String>,
 }
 
+/// Parameters for push_draft tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct PushDraftArgs {
+    /// The draft ID to push to the server as a server-side draft
+    #[schemars(regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+    pub draft_id: String,
+    /// Optional ISO 8601 formatted date for backdating (e.g., 2024-01-15T10:30:00Z)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backdate: Option<String>,
+}
+
 fn default_limit() -> usize {
     10
 }
@@ -763,6 +774,80 @@ impl MicropubMcp {
             serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
         )]))
     }
+
+    /// Push a local draft to the server as a server-side draft
+    #[tool(
+        description = "Push a local draft to the server as a server-side draft (post-status: draft). Uploads any media files and returns the server URL. Can be used to create new server drafts or update existing ones. Supports backdating."
+    )]
+    async fn push_draft(
+        &self,
+        Parameters(args): Parameters<PushDraftArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        // Validate draft_id format to prevent path traversal
+        if args.draft_id.is_empty() {
+            return Err(McpError::invalid_params(
+                "Draft ID cannot be empty".to_string(),
+                None,
+            ));
+        }
+        if !args
+            .draft_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(McpError::invalid_params(
+                "Draft ID must contain only alphanumeric characters, hyphens, and underscores"
+                    .to_string(),
+                None,
+            ));
+        }
+
+        // Parse backdate if provided
+        let backdate_parsed = if let Some(date_str) = args.backdate {
+            let parsed = DateTime::parse_from_rfc3339(&date_str)
+                .map_err(|e| {
+                    McpError::invalid_params(
+                        format!(
+                            "Invalid backdate format: {}. Use ISO 8601 like 2024-01-15T10:30:00Z",
+                            e
+                        ),
+                        None,
+                    )
+                })?
+                .with_timezone(&Utc);
+            Some(parsed)
+        } else {
+            None
+        };
+
+        // Push draft to server
+        let result = crate::draft_push::cmd_push_draft(&args.draft_id, backdate_parsed)
+            .await
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to push draft: {}", e),
+                    None,
+                )
+            })?;
+
+        // Build response JSON
+        let response = serde_json::json!({
+            "url": result.url,
+            "is_update": result.is_update,
+            "status": "server-draft",
+            "uploaded_media": result.uploads.iter().map(|(filename, url)| {
+                serde_json::json!({
+                    "filename": filename,
+                    "url": url
+                })
+            }).collect::<Vec<_>>()
+        });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).unwrap_or_else(|_| response.to_string()),
+        )]))
+    }
 }
 
 /// Prompts for common micropub workflows
@@ -1053,7 +1138,12 @@ impl ServerHandler for MicropubMcp {
                  IMAGE UPLOADS:\n\
                  - Use 'upload_media' tool to upload images explicitly (supports file paths or base64 data)\n\
                  - Or use 'publish_post' with local image paths (e.g., ![alt](~/photo.jpg)) - they'll auto-upload\n\n\
-                 All uploads require authentication via 'micropub auth <domain>' first."
+                 SERVER-SIDE DRAFTS:\n\
+                 - Use 'push_draft' tool to save drafts to server with post-status: draft\n\
+                 - Drafts remain editable locally and can be re-pushed to update\n\
+                 - Use 'publish_post' to change server draft to published status\n\
+                 - Supports media upload and backdating when pushing drafts\n\n\
+                 All uploads and draft operations require authentication via 'micropub auth <domain>' first."
                     .to_string(),
             ),
         }
