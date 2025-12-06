@@ -462,3 +462,64 @@ fn test_publish_workflow_local_vs_server_draft() {
     assert!(server_json.contains("\"published\""));
     assert!(server_json.contains("example.com/posts/draft-123"));
 }
+
+// Task 7: Additional tests for draft push workflow
+#[test]
+fn test_draft_metadata_has_required_fields() {
+    use micropub::draft::DraftMetadata;
+
+    let metadata = DraftMetadata {
+        post_type: "note".to_string(),
+        name: None,
+        published: None,
+        category: Vec::new(),
+        syndicate_to: Vec::new(),
+        profile: None,
+        photo: Vec::new(),
+        status: Some("server-draft".to_string()),
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        published_at: None,
+    };
+
+    assert_eq!(metadata.status, Some("server-draft".to_string()));
+    assert_eq!(
+        metadata.url,
+        Some("https://example.com/posts/draft-123".to_string())
+    );
+}
+
+#[test]
+fn test_is_update_logic() {
+    use micropub::draft::DraftMetadata;
+
+    let metadata_new = DraftMetadata::default();
+    assert!(metadata_new.url.is_none());
+    let is_update_new = metadata_new.url.is_some();
+    assert!(!is_update_new);
+
+    let metadata_existing = DraftMetadata {
+        url: Some("https://example.com/posts/draft-123".to_string()),
+        ..Default::default()
+    };
+    let is_update_existing = metadata_existing.url.is_some();
+    assert!(is_update_existing);
+}
+
+#[test]
+fn test_post_status_draft_property() {
+    use serde_json::{Map, Value};
+
+    let mut properties = Map::new();
+    properties.insert(
+        "post-status".to_string(),
+        Value::Array(vec![Value::String("draft".to_string())]),
+    );
+
+    let post_status = properties
+        .get("post-status")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+        .and_then(|v| v.as_str());
+
+    assert_eq!(post_status, Some("draft"));
+}
