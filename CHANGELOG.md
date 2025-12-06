@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-12-06
+
 ### Added
 - **Server-side Draft Support**: Push local drafts to server with `post-status: draft`
   - New CLI command: `micropub draft push <draft-id> [--backdate <date>]`
