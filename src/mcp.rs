@@ -96,6 +96,23 @@ pub struct UpdatePostArgs {
     pub categories: Option<String>,
 }
 
+/// Parameters for edit_draft tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EditDraftArgs {
+    /// The draft ID to edit (alphanumeric, hyphens, underscores only)
+    #[schemars(regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+    pub draft_id: String,
+    /// New content for the draft (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New title for the draft (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Comma-separated categories (replaces all existing categories)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
+}
+
 /// Parameters for list_posts tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListPostsArgs {
@@ -598,6 +615,59 @@ impl MicropubMcp {
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post updated: {}",
             args.url
+        ))]))
+    }
+
+    /// Edit a local draft without opening an editor
+    #[tool(
+        description = "Edit a local draft's content, title, or categories. Only provided fields are updated; omitted fields remain unchanged."
+    )]
+    async fn edit_draft(
+        &self,
+        Parameters(args): Parameters<EditDraftArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_draft_id(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid draft ID: {}", e), None))?;
+
+        let has_updates =
+            args.content.is_some() || args.title.is_some() || args.categories.is_some();
+
+        if !has_updates {
+            return Err(McpError::invalid_params(
+                "At least one field (content, title, or categories) must be provided".to_string(),
+                None,
+            ));
+        }
+
+        let mut draft = Draft::load(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Failed to load draft: {}", e), None))?;
+
+        if let Some(content) = args.content {
+            draft.content = content;
+        }
+        if let Some(title) = args.title {
+            draft.metadata.name = Some(title);
+        }
+        if let Some(cats) = args.categories {
+            draft.metadata.category = cats.split(',').map(|s| s.trim().to_string()).collect();
+        }
+
+        draft.save().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to save draft: {}", e),
+                None,
+            )
+        })?;
+
+        let title_display = draft
+            .metadata
+            .name
+            .unwrap_or_else(|| "[untitled]".to_string());
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Draft updated: {} ({})",
+            title_display, args.draft_id
         ))]))
     }
 

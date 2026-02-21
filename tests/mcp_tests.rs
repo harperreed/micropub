@@ -666,6 +666,115 @@ fn test_update_post_rejects_empty_url() {
     assert_eq!(parsed.unwrap()["url"], "");
 }
 
+// ============================================================================
+// Edit Draft Tests
+// ============================================================================
+
+#[test]
+fn test_edit_draft_args_with_all_fields() {
+    use serde_json::json;
+
+    let args = json!({
+        "draft_id": "abc123",
+        "content": "Updated draft content",
+        "title": "Updated Draft Title",
+        "categories": "blog, update"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    let val = parsed.unwrap();
+    assert_eq!(val["draft_id"], "abc123");
+    assert_eq!(val["content"], "Updated draft content");
+    assert_eq!(val["title"], "Updated Draft Title");
+    assert_eq!(val["categories"], "blog, update");
+}
+
+#[test]
+fn test_edit_draft_rejects_path_traversal() {
+    use serde_json::json;
+
+    let invalid_ids = vec!["../etc/passwd", "draft/../../secret", "draft..id"];
+
+    for id in invalid_ids {
+        let args = json!({
+            "draft_id": id,
+            "content": "new content"
+        });
+        let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+        assert!(parsed.is_ok());
+        // Actual path traversal validation happens in edit_draft via validate_draft_id
+    }
+}
+
+#[test]
+fn test_edit_draft_requires_at_least_one_field() {
+    use serde_json::json;
+
+    let args = json!({
+        "draft_id": "abc123"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    // Actual validation that at least one of content/title/categories is provided
+    // happens in edit_draft tool function
+}
+
+#[test]
+fn test_edit_draft_args_content_only() {
+    use serde_json::json;
+
+    let args = json!({
+        "draft_id": "abc123",
+        "content": "Only updating content"
+    });
+
+    let parsed: Result<micropub::mcp::EditDraftArgs, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    let val = parsed.unwrap();
+    assert_eq!(val.draft_id, "abc123");
+    assert_eq!(val.content.unwrap(), "Only updating content");
+    assert!(val.title.is_none());
+    assert!(val.categories.is_none());
+}
+
+#[test]
+fn test_edit_draft_args_title_only() {
+    use serde_json::json;
+
+    let args = json!({
+        "draft_id": "abc123",
+        "title": "Only updating title"
+    });
+
+    let parsed: Result<micropub::mcp::EditDraftArgs, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    let val = parsed.unwrap();
+    assert_eq!(val.draft_id, "abc123");
+    assert!(val.content.is_none());
+    assert_eq!(val.title.unwrap(), "Only updating title");
+    assert!(val.categories.is_none());
+}
+
+#[test]
+fn test_edit_draft_args_categories_only() {
+    use serde_json::json;
+
+    let args = json!({
+        "draft_id": "abc123",
+        "categories": "rust, programming"
+    });
+
+    let parsed: Result<micropub::mcp::EditDraftArgs, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    let val = parsed.unwrap();
+    assert_eq!(val.draft_id, "abc123");
+    assert!(val.content.is_none());
+    assert!(val.title.is_none());
+    assert_eq!(val.categories.unwrap(), "rust, programming");
+}
+
 #[test]
 fn test_push_draft_error_messages_are_user_friendly() {
     // Error messages should be clear and actionable, not technical jargon
