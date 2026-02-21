@@ -23,10 +23,12 @@ use rmcp::transport::stdio;
 use rmcp::ErrorData as McpError;
 use rmcp::{schemars, RoleServer, ServerHandler, ServiceExt};
 
-use crate::config::Config;
+use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
+use crate::config::{load_token, Config};
 use crate::draft::Draft;
 use crate::draft_push::validate_draft_id;
 use crate::publish;
+use serde_json::{Map, Value};
 
 /// Parameters for publish_post tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -75,6 +77,23 @@ pub struct UndeletePostArgs {
     /// The URL of the post to undelete
     #[schemars(url)]
     pub url: String,
+}
+
+/// Parameters for update_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UpdatePostArgs {
+    /// The URL of the post to update
+    #[schemars(url)]
+    pub url: String,
+    /// New content for the post (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New title for the post (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Comma-separated categories (replaces all existing categories)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
 }
 
 /// Parameters for list_posts tool
@@ -470,6 +489,114 @@ impl MicropubMcp {
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post restored: {}",
+            args.url
+        ))]))
+    }
+
+    /// Update an existing published post
+    #[tool(
+        description = "Update an existing micropub post. Provide the post URL and any fields to change. Only provided fields are updated; omitted fields remain unchanged."
+    )]
+    async fn update_post(
+        &self,
+        Parameters(args): Parameters<UpdatePostArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if args.url.is_empty() {
+            return Err(McpError::invalid_params(
+                "URL cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        // Build replace map from provided fields
+        let mut replace = Map::new();
+
+        if let Some(content) = args.content {
+            replace.insert(
+                "content".to_string(),
+                Value::Array(vec![Value::String(content)]),
+            );
+        }
+        if let Some(title) = args.title {
+            replace.insert("name".to_string(), Value::Array(vec![Value::String(title)]));
+        }
+        if let Some(cats) = args.categories {
+            let cat_values: Vec<Value> = cats
+                .split(',')
+                .map(|s| Value::String(s.trim().to_string()))
+                .collect();
+            replace.insert("category".to_string(), Value::Array(cat_values));
+        }
+
+        if replace.is_empty() {
+            return Err(McpError::invalid_params(
+                "At least one field (content, title, or categories) must be provided".to_string(),
+                None,
+            ));
+        }
+
+        let config = Config::load().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load config: {}", e),
+                None,
+            )
+        })?;
+
+        let profile_name = &config.default_profile;
+        if profile_name.is_empty() {
+            return Err(McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
+                None,
+            ));
+        }
+
+        let profile = config.get_profile(profile_name).ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "Profile not found".to_string(),
+                None,
+            )
+        })?;
+
+        let micropub_endpoint = profile.micropub_endpoint.as_ref().ok_or_else(|| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                "No micropub endpoint configured".to_string(),
+                None,
+            )
+        })?;
+
+        let token = load_token(profile_name).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load token: {}", e),
+                None,
+            )
+        })?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Update {
+                replace,
+                add: Map::new(),
+                delete: Vec::new(),
+            },
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        let client = MicropubClient::new(micropub_endpoint.clone(), token);
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to update post: {}", e),
+                None,
+            )
+        })?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Post updated: {}",
             args.url
         ))]))
     }

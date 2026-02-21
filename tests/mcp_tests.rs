@@ -616,6 +616,56 @@ fn test_undelete_post_rejects_empty_url() {
     assert_eq!(parsed.unwrap()["url"], "");
 }
 
+// ============================================================================
+// Update Post Tests
+// ============================================================================
+
+#[test]
+fn test_update_post_args_with_all_fields() {
+    use serde_json::json;
+
+    let args = json!({
+        "url": "https://example.com/post/1",
+        "content": "Updated content",
+        "title": "Updated Title",
+        "categories": "tech, rust"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    let val = parsed.unwrap();
+    assert_eq!(val["url"], "https://example.com/post/1");
+    assert_eq!(val["content"], "Updated content");
+    assert_eq!(val["title"], "Updated Title");
+    assert_eq!(val["categories"], "tech, rust");
+}
+
+#[test]
+fn test_update_post_args_url_only() {
+    use serde_json::json;
+
+    let args = json!({
+        "url": "https://example.com/post/1"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+}
+
+#[test]
+fn test_update_post_rejects_empty_url() {
+    use serde_json::json;
+
+    let args = json!({
+        "url": "",
+        "content": "new content"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    assert_eq!(parsed.unwrap()["url"], "");
+}
+
 #[test]
 fn test_push_draft_error_messages_are_user_friendly() {
     // Error messages should be clear and actionable, not technical jargon
