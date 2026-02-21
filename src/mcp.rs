@@ -23,10 +23,12 @@ use rmcp::transport::stdio;
 use rmcp::ErrorData as McpError;
 use rmcp::{schemars, RoleServer, ServerHandler, ServiceExt};
 
-use crate::config::Config;
+use crate::client::{MicropubAction, MicropubClient, MicropubRequest};
+use crate::config::{load_token, Config};
 use crate::draft::Draft;
 use crate::draft_push::validate_draft_id;
 use crate::publish;
+use serde_json::{Map, Value};
 
 /// Parameters for publish_post tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -49,6 +51,9 @@ pub struct CreateDraftArgs {
     /// Optional title for the draft
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Optional comma-separated categories
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
 }
 
 /// Parameters for publish_backdate tool
@@ -67,6 +72,55 @@ pub struct DeletePostArgs {
     /// The URL of the post to delete
     #[schemars(url)]
     pub url: String,
+}
+
+/// Parameters for undelete_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UndeletePostArgs {
+    /// The URL of the post to undelete
+    #[schemars(url)]
+    pub url: String,
+}
+
+/// Parameters for update_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UpdatePostArgs {
+    /// The URL of the post to update
+    #[schemars(url)]
+    pub url: String,
+    /// New content for the post (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New title for the post (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Comma-separated categories (replaces all existing categories)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
+}
+
+/// Parameters for edit_draft tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct EditDraftArgs {
+    /// The draft ID to edit (alphanumeric, hyphens, underscores only)
+    #[schemars(regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+    pub draft_id: String,
+    /// New content for the draft (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New title for the draft (replaces existing)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Comma-separated categories (replaces all existing categories)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
+}
+
+/// Parameters for search_drafts tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchDraftsArgs {
+    /// Search query to match against draft titles, content, and categories
+    pub query: String,
 }
 
 /// Parameters for list_posts tool
@@ -205,6 +259,68 @@ impl MicropubMcp {
     }
 }
 
+/// Load the micropub client from the default profile config and token.
+/// Shared by tools that need to send requests to the micropub endpoint
+/// without going through CLI functions that println! to stdout.
+fn load_micropub_client() -> std::result::Result<MicropubClient, McpError> {
+    let config = Config::load().map_err(|e| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Failed to load config: {}", e),
+            None,
+        )
+    })?;
+
+    let profile_name = &config.default_profile;
+    if profile_name.is_empty() {
+        return Err(McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
+            None,
+        ));
+    }
+
+    let profile = config.get_profile(profile_name).ok_or_else(|| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "Profile not found".to_string(),
+            None,
+        )
+    })?;
+
+    let micropub_endpoint = profile.micropub_endpoint.as_ref().ok_or_else(|| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "No micropub endpoint configured".to_string(),
+            None,
+        )
+    })?;
+
+    let token = load_token(profile_name).map_err(|e| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Failed to load token: {}", e),
+            None,
+        )
+    })?;
+
+    Ok(MicropubClient::new(micropub_endpoint.clone(), token))
+}
+
+/// Truncate a string to a maximum number of characters, respecting UTF-8 boundaries.
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let char_count: usize = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else if max_chars < 4 {
+        // Too short for ellipsis to be useful; just truncate
+        s.chars().take(max_chars).collect()
+    } else {
+        let truncated: String = s.chars().take(max_chars - 3).collect();
+        format!("{}...", truncated)
+    }
+}
+
 #[tool_router]
 impl MicropubMcp {
     /// Create and publish a post immediately
@@ -228,9 +344,13 @@ impl MicropubMcp {
         draft.content = args.content;
         draft.metadata.name = args.title;
 
-        // Parse categories as comma-separated
+        // Parse categories as comma-separated, filtering empty entries
         if let Some(cats) = args.categories {
-            draft.metadata.category = cats.split(',').map(|s| s.trim().to_string()).collect();
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
 
         let draft_path = draft.save().map_err(|e| {
@@ -289,6 +409,15 @@ impl MicropubMcp {
         let mut draft = Draft::new(uuid::Uuid::new_v4().to_string());
         draft.content = args.content;
         draft.metadata.name = args.title;
+
+        // Parse categories as comma-separated, filtering empty entries
+        if let Some(cats) = args.categories {
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
 
         draft.save().map_err(|e| {
             McpError::new(
@@ -413,7 +542,6 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<DeletePostArgs>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate URL is not empty
         if args.url.is_empty() {
             return Err(McpError::invalid_params(
                 "URL cannot be empty".to_string(),
@@ -421,20 +549,299 @@ impl MicropubMcp {
             ));
         }
 
-        crate::operations::cmd_delete(&args.url)
-            .await
-            .map_err(|e| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to delete post: {}", e),
-                    None,
-                )
-            })?;
+        let client = load_micropub_client()?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Delete,
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to delete post: {}", e),
+                None,
+            )
+        })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post deleted: {}",
             args.url
         ))]))
+    }
+
+    /// Restore a deleted post
+    #[tool(description = "Restore a previously deleted micropub post by URL")]
+    async fn undelete_post(
+        &self,
+        Parameters(args): Parameters<UndeletePostArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if args.url.is_empty() {
+            return Err(McpError::invalid_params(
+                "URL cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        let client = load_micropub_client()?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Undelete,
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to undelete post: {}", e),
+                None,
+            )
+        })?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Post restored: {}",
+            args.url
+        ))]))
+    }
+
+    /// Update an existing published post
+    #[tool(
+        description = "Update an existing micropub post. Provide the post URL and any fields to change. Only provided fields are updated; omitted fields remain unchanged."
+    )]
+    async fn update_post(
+        &self,
+        Parameters(args): Parameters<UpdatePostArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if args.url.is_empty() {
+            return Err(McpError::invalid_params(
+                "URL cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        // Build replace map from provided fields
+        let mut replace = Map::new();
+
+        if let Some(content) = args.content {
+            replace.insert(
+                "content".to_string(),
+                Value::Array(vec![Value::String(content)]),
+            );
+        }
+        if let Some(title) = args.title {
+            replace.insert("name".to_string(), Value::Array(vec![Value::String(title)]));
+        }
+        if let Some(cats) = args.categories {
+            let cat_values: Vec<Value> = cats
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Value::String(s.to_string()))
+                .collect();
+            replace.insert("category".to_string(), Value::Array(cat_values));
+        }
+
+        if replace.is_empty() {
+            return Err(McpError::invalid_params(
+                "At least one field (content, title, or categories) must be provided".to_string(),
+                None,
+            ));
+        }
+
+        let client = load_micropub_client()?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Update {
+                replace,
+                add: Map::new(),
+                delete: Vec::new(),
+            },
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to update post: {}", e),
+                None,
+            )
+        })?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Post updated: {}",
+            args.url
+        ))]))
+    }
+
+    /// Edit a local draft without opening an editor
+    #[tool(
+        description = "Edit a local draft's content, title, or categories. Only provided fields are updated; omitted fields remain unchanged."
+    )]
+    async fn edit_draft(
+        &self,
+        Parameters(args): Parameters<EditDraftArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_draft_id(&args.draft_id)
+            .map_err(|e| McpError::invalid_params(format!("Invalid draft ID: {}", e), None))?;
+
+        let has_updates =
+            args.content.is_some() || args.title.is_some() || args.categories.is_some();
+
+        if !has_updates {
+            return Err(McpError::invalid_params(
+                "At least one field (content, title, or categories) must be provided".to_string(),
+                None,
+            ));
+        }
+
+        let mut draft = Draft::load(&args.draft_id).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load draft: {}", e),
+                None,
+            )
+        })?;
+
+        if let Some(content) = args.content {
+            draft.content = content;
+        }
+        if let Some(title) = args.title {
+            // Empty title clears the title (sets to None)
+            draft.metadata.name = if title.trim().is_empty() {
+                None
+            } else {
+                Some(title)
+            };
+        }
+        if let Some(cats) = args.categories {
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+
+        draft.save().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to save draft: {}", e),
+                None,
+            )
+        })?;
+
+        let title_display = draft
+            .metadata
+            .name
+            .unwrap_or_else(|| "[untitled]".to_string());
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Draft updated: {} ({})",
+            title_display, args.draft_id
+        ))]))
+    }
+
+    /// Search local drafts by text
+    #[tool(
+        description = "Search local drafts by text query. Matches against title, content, and categories."
+    )]
+    async fn search_drafts(
+        &self,
+        Parameters(args): Parameters<SearchDraftsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = args.query.trim();
+        if query.is_empty() {
+            return Err(McpError::invalid_params(
+                "Search query cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        let draft_ids = Draft::list_all().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to list drafts: {}", e),
+                None,
+            )
+        })?;
+
+        if draft_ids.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No drafts found.",
+            )]));
+        }
+
+        let query_lower = query.to_lowercase();
+        let mut output = String::new();
+        let mut found_count = 0;
+
+        for id in draft_ids {
+            let draft = match Draft::load(&id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let mut matches = Vec::new();
+
+            if let Some(ref title) = draft.metadata.name {
+                if title.to_lowercase().contains(&query_lower) {
+                    matches.push("title");
+                }
+            }
+
+            if draft.content.to_lowercase().contains(&query_lower) {
+                matches.push("content");
+            }
+
+            if draft
+                .metadata
+                .category
+                .iter()
+                .any(|c| c.to_lowercase().contains(&query_lower))
+            {
+                matches.push("category");
+            }
+
+            if !matches.is_empty() {
+                found_count += 1;
+                let title = draft
+                    .metadata
+                    .name
+                    .unwrap_or_else(|| "[untitled]".to_string());
+                output.push_str(&format!(
+                    "- {} ({}) [matched: {}]\n",
+                    title,
+                    id,
+                    matches.join(", ")
+                ));
+
+                if matches.contains(&"content") {
+                    if let Some(snippet) = draft
+                        .content
+                        .lines()
+                        .find(|line| line.to_lowercase().contains(&query_lower))
+                    {
+                        let preview = truncate_with_ellipsis(snippet, 80);
+                        output.push_str(&format!("  > {}\n", preview));
+                    }
+                }
+            }
+        }
+
+        if found_count == 0 {
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "No drafts found matching '{}'.",
+                query
+            ))]))
+        } else {
+            let header = format!("Found {} draft(s) matching '{}':\n\n", found_count, query);
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "{}{}",
+                header, output
+            ))]))
+        }
     }
 
     /// Get authentication status
@@ -507,11 +914,7 @@ impl MicropubMcp {
                 output.push_str(&format!("  Categories: {}\n", post.categories.join(", ")));
             }
             if !post.content.is_empty() {
-                let preview = if post.content.len() > 100 {
-                    format!("{}...", &post.content[..100])
-                } else {
-                    post.content.clone()
-                };
+                let preview = truncate_with_ellipsis(&post.content, 100);
                 output.push_str(&format!("  Preview: {}\n", preview));
             }
             output.push('\n');
@@ -687,14 +1090,29 @@ impl MicropubMcp {
         } else if let Some(file_data) = args.file_data {
             let filename = args.filename.unwrap(); // Already validated above
 
+            // Sanitize filename to prevent path traversal: strip directory components
+            let safe_filename = std::path::Path::new(&filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        "Filename must be a simple filename without path separators".to_string(),
+                        None,
+                    )
+                })?;
+
             // Decode base64
             let decoded = general_purpose::STANDARD.decode(&file_data).map_err(|e| {
                 McpError::invalid_params(format!("Invalid base64 data: {}", e), None)
             })?;
 
-            // Write to temp file
+            // Write to temp file with UUID prefix to avoid collisions
             let temp_dir = std::env::temp_dir();
-            let temp_path = temp_dir.join(&filename);
+            let temp_path = temp_dir.join(format!(
+                "micropub-{}-{}",
+                uuid::Uuid::new_v4(),
+                safe_filename
+            ));
 
             std::fs::write(&temp_path, decoded).map_err(|e| {
                 McpError::new(
@@ -721,7 +1139,7 @@ impl MicropubMcp {
             // Clean up temp file
             let _ = std::fs::remove_file(&temp_path);
 
-            (url, filename, mime.to_string())
+            (url, safe_filename.to_string(), mime.to_string())
         } else {
             unreachable!("Validation ensures file_path or file_data is present");
         };
@@ -1094,6 +1512,12 @@ impl ServerHandler for MicropubMcp {
                  IMAGE UPLOADS:\n\
                  - Use 'upload_media' tool to upload images explicitly (supports file paths or base64 data)\n\
                  - Or use 'publish_post' with local image paths (e.g., ![alt](~/photo.jpg)) - they'll auto-upload\n\n\
+                 POST MANAGEMENT:\n\
+                 - Use 'update_post' to modify an existing post's content, title, or categories\n\
+                 - Use 'undelete_post' to restore a previously deleted post\n\n\
+                 DRAFT EDITING:\n\
+                 - Use 'edit_draft' to update a draft's content, title, or categories without an editor\n\
+                 - Use 'search_drafts' to find drafts by text across titles, content, and categories\n\n\
                  SERVER-SIDE DRAFTS:\n\
                  - Use 'push_draft' tool to save drafts to server with post-status: draft\n\
                  - Drafts remain editable locally and can be re-pushed to update\n\

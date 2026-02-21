@@ -75,14 +75,14 @@ pub async fn cmd_publish(
                 profile_name, profile.domain
             ))?;
 
-        println!("Uploading {} media file(s)...", media_refs.len());
+        eprintln!("Uploading {} media file(s)...", media_refs.len());
 
         for local_path in media_refs {
             let resolved = resolve_path(&local_path, None)?;
-            println!("  Uploading: {}", resolved.display());
+            eprintln!("  Uploading: {}", resolved.display());
 
             let url = upload_file(media_endpoint, &token, &resolved).await?;
-            println!("    -> {}", url);
+            eprintln!("    -> {}", url);
 
             let filename = resolved
                 .file_name()
@@ -230,7 +230,7 @@ pub async fn cmd_publish(
 
     let client = MicropubClient::new(micropub_endpoint.clone(), token);
 
-    println!("Publishing to {}...", profile.domain);
+    eprintln!("Publishing to {}...", profile.domain);
     let response = client.send(&request).await?;
 
     // Archive draft with metadata
@@ -240,11 +240,11 @@ pub async fn cmd_publish(
 
     let archive_path = draft.archive()?;
 
-    println!("✓ Published successfully!");
+    eprintln!("✓ Published successfully!");
     if let Some(url) = response.url {
-        println!("  URL: {}", url);
+        eprintln!("  URL: {}", url);
     }
-    println!("  Draft archived to: {}", archive_path.display());
+    eprintln!("  Draft archived to: {}", archive_path.display());
 
     Ok(upload_results)
 }

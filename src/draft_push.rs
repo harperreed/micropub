@@ -102,14 +102,14 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
             profile_name, profile.domain
         ))?;
 
-        println!("Uploading {} media file(s)...", media_refs.len());
+        eprintln!("Uploading {} media file(s)...", media_refs.len());
 
         for local_path in media_refs {
             let resolved = resolve_path(&local_path, None)?;
-            println!("  Uploading: {}", resolved.display());
+            eprintln!("  Uploading: {}", resolved.display());
 
             let url = upload_file(media_endpoint, &token, &resolved).await?;
-            println!("    -> {}", url);
+            eprintln!("    -> {}", url);
 
             let filename = resolved
                 .file_name()
@@ -281,7 +281,7 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
 
     let client = MicropubClient::new(micropub_endpoint.clone(), token);
 
-    println!("Pushing draft to {}...", profile.domain);
+    eprintln!("Pushing draft to {}...", profile.domain);
     let response = client.send(&request).await?;
 
     // Update draft metadata
@@ -295,8 +295,8 @@ pub async fn cmd_push_draft(draft_id: &str, backdate: Option<DateTime<Utc>>) -> 
          The draft was successfully pushed to the server, but local metadata could not be updated.",
     )?;
 
-    println!("✓ Draft pushed successfully!");
-    println!("  URL: {}", server_url);
+    eprintln!("✓ Draft pushed successfully!");
+    eprintln!("  URL: {}", server_url);
 
     Ok(PushResult {
         url: server_url,

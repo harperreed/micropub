@@ -472,8 +472,9 @@ pub async fn cmd_list_posts(limit: usize, offset: usize) -> Result<()> {
 
         for (idx, post) in posts.iter().enumerate() {
             let display_content = post.name.as_ref().unwrap_or(&post.content);
-            let content_preview = if display_content.len() > 80 {
-                format!("{}...", &display_content[..77])
+            let content_preview = if display_content.chars().count() > 80 {
+                let truncated: String = display_content.chars().take(77).collect();
+                format!("{}...", truncated)
             } else {
                 display_content.to_string()
             };
