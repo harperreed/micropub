@@ -51,6 +51,9 @@ pub struct CreateDraftArgs {
     /// Optional title for the draft
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Optional comma-separated categories
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<String>,
 }
 
 /// Parameters for publish_backdate tool
@@ -404,6 +407,15 @@ impl MicropubMcp {
         draft.content = args.content;
         draft.metadata.name = args.title;
 
+        // Parse categories as comma-separated, filtering empty entries
+        if let Some(cats) = args.categories {
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+
         draft.save().map_err(|e| {
             McpError::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -682,8 +694,13 @@ impl MicropubMcp {
             ));
         }
 
-        let mut draft = Draft::load(&args.draft_id)
-            .map_err(|e| McpError::invalid_params(format!("Failed to load draft: {}", e), None))?;
+        let mut draft = Draft::load(&args.draft_id).map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to load draft: {}", e),
+                None,
+            )
+        })?;
 
         if let Some(content) = args.content {
             draft.content = content;
@@ -1070,14 +1087,29 @@ impl MicropubMcp {
         } else if let Some(file_data) = args.file_data {
             let filename = args.filename.unwrap(); // Already validated above
 
+            // Sanitize filename to prevent path traversal: strip directory components
+            let safe_filename = std::path::Path::new(&filename)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        "Filename must be a simple filename without path separators".to_string(),
+                        None,
+                    )
+                })?;
+
             // Decode base64
             let decoded = general_purpose::STANDARD.decode(&file_data).map_err(|e| {
                 McpError::invalid_params(format!("Invalid base64 data: {}", e), None)
             })?;
 
-            // Write to temp file
+            // Write to temp file with UUID prefix to avoid collisions
             let temp_dir = std::env::temp_dir();
-            let temp_path = temp_dir.join(&filename);
+            let temp_path = temp_dir.join(format!(
+                "micropub-{}-{}",
+                uuid::Uuid::new_v4(),
+                safe_filename
+            ));
 
             std::fs::write(&temp_path, decoded).map_err(|e| {
                 McpError::new(
