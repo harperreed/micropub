@@ -256,6 +256,65 @@ impl MicropubMcp {
     }
 }
 
+/// Load the micropub client from the default profile config and token.
+/// Shared by tools that need to send requests to the micropub endpoint
+/// without going through CLI functions that println! to stdout.
+fn load_micropub_client() -> std::result::Result<MicropubClient, McpError> {
+    let config = Config::load().map_err(|e| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Failed to load config: {}", e),
+            None,
+        )
+    })?;
+
+    let profile_name = &config.default_profile;
+    if profile_name.is_empty() {
+        return Err(McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
+            None,
+        ));
+    }
+
+    let profile = config.get_profile(profile_name).ok_or_else(|| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "Profile not found".to_string(),
+            None,
+        )
+    })?;
+
+    let micropub_endpoint = profile.micropub_endpoint.as_ref().ok_or_else(|| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            "No micropub endpoint configured".to_string(),
+            None,
+        )
+    })?;
+
+    let token = load_token(profile_name).map_err(|e| {
+        McpError::new(
+            ErrorCode::INTERNAL_ERROR,
+            format!("Failed to load token: {}", e),
+            None,
+        )
+    })?;
+
+    Ok(MicropubClient::new(micropub_endpoint.clone(), token))
+}
+
+/// Truncate a string to a maximum number of characters, respecting UTF-8 boundaries.
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let char_count: usize = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        format!("{}...", truncated)
+    }
+}
+
 #[tool_router]
 impl MicropubMcp {
     /// Create and publish a post immediately
@@ -279,9 +338,13 @@ impl MicropubMcp {
         draft.content = args.content;
         draft.metadata.name = args.title;
 
-        // Parse categories as comma-separated
+        // Parse categories as comma-separated, filtering empty entries
         if let Some(cats) = args.categories {
-            draft.metadata.category = cats.split(',').map(|s| s.trim().to_string()).collect();
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
 
         let draft_path = draft.save().map_err(|e| {
@@ -464,7 +527,6 @@ impl MicropubMcp {
         &self,
         Parameters(args): Parameters<DeletePostArgs>,
     ) -> Result<CallToolResult, McpError> {
-        // Validate URL is not empty
         if args.url.is_empty() {
             return Err(McpError::invalid_params(
                 "URL cannot be empty".to_string(),
@@ -472,15 +534,21 @@ impl MicropubMcp {
             ));
         }
 
-        crate::operations::cmd_delete(&args.url)
-            .await
-            .map_err(|e| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to delete post: {}", e),
-                    None,
-                )
-            })?;
+        let client = load_micropub_client()?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Delete,
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to delete post: {}", e),
+                None,
+            )
+        })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post deleted: {}",
@@ -501,15 +569,21 @@ impl MicropubMcp {
             ));
         }
 
-        crate::operations::cmd_undelete(&args.url)
-            .await
-            .map_err(|e| {
-                McpError::new(
-                    ErrorCode::INTERNAL_ERROR,
-                    format!("Failed to undelete post: {}", e),
-                    None,
-                )
-            })?;
+        let client = load_micropub_client()?;
+
+        let request = MicropubRequest {
+            action: MicropubAction::Undelete,
+            properties: Map::new(),
+            url: Some(args.url.clone()),
+        };
+
+        client.send(&request).await.map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to undelete post: {}", e),
+                None,
+            )
+        })?;
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post restored: {}",
@@ -547,7 +621,9 @@ impl MicropubMcp {
         if let Some(cats) = args.categories {
             let cat_values: Vec<Value> = cats
                 .split(',')
-                .map(|s| Value::String(s.trim().to_string()))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| Value::String(s.to_string()))
                 .collect();
             replace.insert("category".to_string(), Value::Array(cat_values));
         }
@@ -559,46 +635,7 @@ impl MicropubMcp {
             ));
         }
 
-        let config = Config::load().map_err(|e| {
-            McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Failed to load config: {}", e),
-                None,
-            )
-        })?;
-
-        let profile_name = &config.default_profile;
-        if profile_name.is_empty() {
-            return Err(McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                "No profile configured. Run 'micropub auth <domain>' first.".to_string(),
-                None,
-            ));
-        }
-
-        let profile = config.get_profile(profile_name).ok_or_else(|| {
-            McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                "Profile not found".to_string(),
-                None,
-            )
-        })?;
-
-        let micropub_endpoint = profile.micropub_endpoint.as_ref().ok_or_else(|| {
-            McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                "No micropub endpoint configured".to_string(),
-                None,
-            )
-        })?;
-
-        let token = load_token(profile_name).map_err(|e| {
-            McpError::new(
-                ErrorCode::INTERNAL_ERROR,
-                format!("Failed to load token: {}", e),
-                None,
-            )
-        })?;
+        let client = load_micropub_client()?;
 
         let request = MicropubRequest {
             action: MicropubAction::Update {
@@ -610,7 +647,6 @@ impl MicropubMcp {
             url: Some(args.url.clone()),
         };
 
-        let client = MicropubClient::new(micropub_endpoint.clone(), token);
         client.send(&request).await.map_err(|e| {
             McpError::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -653,10 +689,19 @@ impl MicropubMcp {
             draft.content = content;
         }
         if let Some(title) = args.title {
-            draft.metadata.name = Some(title);
+            // Empty title clears the title (sets to None)
+            draft.metadata.name = if title.trim().is_empty() {
+                None
+            } else {
+                Some(title)
+            };
         }
         if let Some(cats) = args.categories {
-            draft.metadata.category = cats.split(',').map(|s| s.trim().to_string()).collect();
+            draft.metadata.category = cats
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
 
         draft.save().map_err(|e| {
@@ -758,11 +803,7 @@ impl MicropubMcp {
                         .lines()
                         .find(|line| line.to_lowercase().contains(&query_lower))
                     {
-                        let preview = if snippet.len() > 80 {
-                            format!("{}...", &snippet[..77])
-                        } else {
-                            snippet.to_string()
-                        };
+                        let preview = truncate_with_ellipsis(snippet, 80);
                         output.push_str(&format!("  > {}\n", preview));
                     }
                 }
@@ -853,11 +894,7 @@ impl MicropubMcp {
                 output.push_str(&format!("  Categories: {}\n", post.categories.join(", ")));
             }
             if !post.content.is_empty() {
-                let preview = if post.content.len() > 100 {
-                    format!("{}...", &post.content[..100])
-                } else {
-                    post.content.clone()
-                };
+                let preview = truncate_with_ellipsis(&post.content, 100);
                 output.push_str(&format!("  Preview: {}\n", preview));
             }
             output.push('\n');
