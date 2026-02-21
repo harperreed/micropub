@@ -312,8 +312,11 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
     let char_count: usize = s.chars().count();
     if char_count <= max_chars {
         s.to_string()
+    } else if max_chars < 4 {
+        // Too short for ellipsis to be useful; just truncate
+        s.chars().take(max_chars).collect()
     } else {
-        let truncated: String = s.chars().take(max_chars.saturating_sub(3)).collect();
+        let truncated: String = s.chars().take(max_chars - 3).collect();
         format!("{}...", truncated)
     }
 }
@@ -1136,7 +1139,7 @@ impl MicropubMcp {
             // Clean up temp file
             let _ = std::fs::remove_file(&temp_path);
 
-            (url, filename, mime.to_string())
+            (url, safe_filename.to_string(), mime.to_string())
         } else {
             unreachable!("Validation ensures file_path or file_data is present");
         };
