@@ -113,6 +113,13 @@ pub struct EditDraftArgs {
     pub categories: Option<String>,
 }
 
+/// Parameters for search_drafts tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchDraftsArgs {
+    /// Search query to match against draft titles, content, and categories
+    pub query: String,
+}
+
 /// Parameters for list_posts tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListPostsArgs {
@@ -669,6 +676,111 @@ impl MicropubMcp {
             "Draft updated: {} ({})",
             title_display, args.draft_id
         ))]))
+    }
+
+    /// Search local drafts by text
+    #[tool(
+        description = "Search local drafts by text query. Matches against title, content, and categories."
+    )]
+    async fn search_drafts(
+        &self,
+        Parameters(args): Parameters<SearchDraftsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = args.query.trim();
+        if query.is_empty() {
+            return Err(McpError::invalid_params(
+                "Search query cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        let draft_ids = Draft::list_all().map_err(|e| {
+            McpError::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("Failed to list drafts: {}", e),
+                None,
+            )
+        })?;
+
+        if draft_ids.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No drafts found.",
+            )]));
+        }
+
+        let query_lower = query.to_lowercase();
+        let mut output = String::new();
+        let mut found_count = 0;
+
+        for id in draft_ids {
+            let draft = match Draft::load(&id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let mut matches = Vec::new();
+
+            if let Some(ref title) = draft.metadata.name {
+                if title.to_lowercase().contains(&query_lower) {
+                    matches.push("title");
+                }
+            }
+
+            if draft.content.to_lowercase().contains(&query_lower) {
+                matches.push("content");
+            }
+
+            if draft
+                .metadata
+                .category
+                .iter()
+                .any(|c| c.to_lowercase().contains(&query_lower))
+            {
+                matches.push("category");
+            }
+
+            if !matches.is_empty() {
+                found_count += 1;
+                let title = draft
+                    .metadata
+                    .name
+                    .unwrap_or_else(|| "[untitled]".to_string());
+                output.push_str(&format!(
+                    "- {} ({}) [matched: {}]\n",
+                    title,
+                    id,
+                    matches.join(", ")
+                ));
+
+                if matches.contains(&"content") {
+                    if let Some(snippet) = draft
+                        .content
+                        .lines()
+                        .find(|line| line.to_lowercase().contains(&query_lower))
+                    {
+                        let preview = if snippet.len() > 80 {
+                            format!("{}...", &snippet[..77])
+                        } else {
+                            snippet.to_string()
+                        };
+                        output.push_str(&format!("  > {}\n", preview));
+                    }
+                }
+            }
+        }
+
+        if found_count == 0 {
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "No drafts found matching '{}'.",
+                query
+            ))]))
+        } else {
+            let header = format!("Found {} draft(s) matching '{}':\n\n", found_count, query);
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "{}{}",
+                header, output
+            ))]))
+        }
     }
 
     /// Get authentication status

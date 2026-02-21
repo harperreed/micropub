@@ -775,6 +775,36 @@ fn test_edit_draft_args_categories_only() {
     assert_eq!(val.categories.unwrap(), "rust, programming");
 }
 
+// ============================================================================
+// Search Drafts Tests
+// ============================================================================
+
+#[test]
+fn test_search_drafts_args_deserialize() {
+    use serde_json::json;
+
+    let args = json!({
+        "query": "rust programming"
+    });
+
+    let parsed: Result<micropub::mcp::SearchDraftsArgs, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    assert_eq!(parsed.unwrap().query, "rust programming");
+}
+
+#[test]
+fn test_search_drafts_rejects_empty_query() {
+    use serde_json::json;
+
+    let args = json!({
+        "query": ""
+    });
+
+    let parsed: Result<micropub::mcp::SearchDraftsArgs, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    assert_eq!(parsed.unwrap().query, "");
+}
+
 #[test]
 fn test_push_draft_error_messages_are_user_friendly() {
     // Error messages should be clear and actionable, not technical jargon
