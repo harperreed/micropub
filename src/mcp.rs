@@ -69,6 +69,14 @@ pub struct DeletePostArgs {
     pub url: String,
 }
 
+/// Parameters for undelete_post tool
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct UndeletePostArgs {
+    /// The URL of the post to undelete
+    #[schemars(url)]
+    pub url: String,
+}
+
 /// Parameters for list_posts tool
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ListPostsArgs {
@@ -433,6 +441,35 @@ impl MicropubMcp {
 
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Post deleted: {}",
+            args.url
+        ))]))
+    }
+
+    /// Restore a deleted post
+    #[tool(description = "Restore a previously deleted micropub post by URL")]
+    async fn undelete_post(
+        &self,
+        Parameters(args): Parameters<UndeletePostArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        if args.url.is_empty() {
+            return Err(McpError::invalid_params(
+                "URL cannot be empty".to_string(),
+                None,
+            ));
+        }
+
+        crate::operations::cmd_undelete(&args.url)
+            .await
+            .map_err(|e| {
+                McpError::new(
+                    ErrorCode::INTERNAL_ERROR,
+                    format!("Failed to undelete post: {}", e),
+                    None,
+                )
+            })?;
+
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Post restored: {}",
             args.url
         ))]))
     }

@@ -586,6 +586,36 @@ fn test_push_draft_error_codes_are_appropriate() {
     assert_eq!(internal_error["code"], "internal_error");
 }
 
+// ============================================================================
+// Undelete Post Tests
+// ============================================================================
+
+#[test]
+fn test_undelete_post_args_deserialize() {
+    use serde_json::json;
+
+    let args = json!({
+        "url": "https://example.com/post/1"
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    assert_eq!(parsed.unwrap()["url"], "https://example.com/post/1");
+}
+
+#[test]
+fn test_undelete_post_rejects_empty_url() {
+    use serde_json::json;
+
+    let args = json!({
+        "url": ""
+    });
+
+    let parsed: Result<serde_json::Value, _> = serde_json::from_value(args);
+    assert!(parsed.is_ok());
+    assert_eq!(parsed.unwrap()["url"], "");
+}
+
 #[test]
 fn test_push_draft_error_messages_are_user_friendly() {
     // Error messages should be clear and actionable, not technical jargon
