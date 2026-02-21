@@ -1440,6 +1440,12 @@ impl ServerHandler for MicropubMcp {
                  IMAGE UPLOADS:\n\
                  - Use 'upload_media' tool to upload images explicitly (supports file paths or base64 data)\n\
                  - Or use 'publish_post' with local image paths (e.g., ![alt](~/photo.jpg)) - they'll auto-upload\n\n\
+                 POST MANAGEMENT:\n\
+                 - Use 'update_post' to modify an existing post's content, title, or categories\n\
+                 - Use 'undelete_post' to restore a previously deleted post\n\n\
+                 DRAFT EDITING:\n\
+                 - Use 'edit_draft' to update a draft's content, title, or categories without an editor\n\
+                 - Use 'search_drafts' to find drafts by text across titles, content, and categories\n\n\
                  SERVER-SIDE DRAFTS:\n\
                  - Use 'push_draft' tool to save drafts to server with post-status: draft\n\
                  - Drafts remain editable locally and can be re-pushed to update\n\
